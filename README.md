@@ -1,7 +1,7 @@
 # Batch Conformal Decision Theory with Fewer Counterfactual Evaluations
 
 Research draft and executable experiments accompanying
-[the paper](paper/main.pdf) ([LaTeX source](paper/main.tex)).
+[the paper](https://www.alphaxiv.org/pdf/2611.batch-conformal-counterfactual-evaluations).
 
 We study the number of counterfactual planner calls needed for exact batch
 calibration. The paper gives an order-statistic reduction for monotone binary

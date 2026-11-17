@@ -1,0 +1,633 @@
+\ifcsname pdfmapfile\endcsname
+\pdfmapfile{+lm.map}
+\pdfmapfile{+cm.map}
+\pdfmapfile{+symbols.map}
+\pdfmapfile{+latxfont.map}
+\fi
+\documentclass[a4paper,10pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[OT1]{fontenc}
+\usepackage{microtype}
+\usepackage{needspace}
+\usepackage[margin=1in,headheight=15pt,headsep=18pt,footskip=28pt]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{booktabs,tabularx}
+\usepackage{caption}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+
+\definecolor{paperNavy}{RGB}{25,53,79}
+\definecolor{safeGreen}{RGB}{39,112,75}
+\definecolor{safeFill}{RGB}{235,245,240}
+\definecolor{unsafeRed}{RGB}{179,74,53}
+\definecolor{unsafeFill}{RGB}{250,236,233}
+\hypersetup{colorlinks=true,linkcolor=paperNavy,citecolor=paperNavy,urlcolor=paperNavy,
+pdftitle={Batch Conformal Decision Theory with Fewer Counterfactual Evaluations},
+pdfauthor={Sidhant Mohanty}}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{4.5pt plus 1pt minus 1pt}
+\setlength{\emergencystretch}{2em}
+\captionsetup{font=small,labelfont=bf,justification=justified,singlelinecheck=false,hypcap=false}
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{Batch CDT with fewer planner calls}
+\fancyhead[R]{November 2026}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\begin{document}
+\thispagestyle{plain}
+\vspace*{10pt}
+\begin{center}
+{\fontsize{17.5}{21}\selectfont\bfseries\color{paperNavy}
+Batch Conformal Decision Theory with\par Fewer Counterfactual Evaluations\par}
+\vspace{16pt}
+{\normalsize Sidhant Mohanty\par}
+\vspace{2pt}
+{\small Department of Electrical Engineering, IIT Indore\par}
+\vspace{5pt}
+{\normalsize 17 November 2026\par}
+\end{center}
+\vspace{6pt}
+
+\begin{center}\textbf{Abstract}\end{center}
+\vspace{-4pt}
+\begin{list}{}{\leftmargin=2em\rightmargin=2em\topsep=0pt\parsep=0pt}
+\item Conformal decision theory (CDT) calibrates a planner directly for low risk rather than calibrating upstream prediction sets: given a calibration dataset of $n$ historical data points and a conformal control variable $\lambda$ that governs planner caution, batch CDT selects the least conservative parameter whose empirical loss stays below a prescribed budget. Finding this parameter requires evaluating counterfactual decisions by running the planner on past data points at candidate values of $\lambda$ and scoring each decision against the observed outcome. We aim to reduce the number of such counterfactual evaluations. When realized binary losses are nonincreasing in $\lambda$ across a grid of $J$ parameters, the calibrated cutoff is determined by an order statistic of the data points' last unsafe grid indices. We prove that any exact black-box algorithm requires $\Omega(n+\log J)$ loss queries in the worst case, and we give an anchored randomized Quickselect algorithm that uses $O(n+\log J\log n)$ queries in expectation. When the planner scores candidate decisions by functions affine in $\lambda$, its selected decision changes only at intersections along an upper envelope of score lines; sweeping backward from the most conservative interval recovers the exact cutoff even when prediction errors make the realized loss nonmonotone in $\lambda$. For parametric linear programs, reversing the Eisner--Severance recursion generates these optimality intervals from right to left on demand, avoiding unnecessary planner solves and loss evaluations while preserving the finite-sample conformal risk bound under exchangeability and a safe fallback.
+\end{list}
+\vspace{4pt}
+{\small\noindent Code and experiments: \href{https://github.com/ImperatorAvrelianvs/batch-cdt}{\texttt{github.com/ImperatorAvrelianvs/batch-cdt}}.\par}
+
+\section{Introduction}\label{sec:intro}
+
+Planners in autonomous systems routinely act on imperfect predictions: for example, consider a robot that must navigate in a crowd of pedestrians whose locations it must predict, while an operations planner must allocate resources appropriately. One popular way to attach distribution-free guarantees to learned predictors is split conformal prediction, which constructs a prediction set covering the true outcome with probability at least $1-\alpha$ and asks the planner to hedge against every outcome inside that set. In decision-making problems, however, simultaneous coverage over all predicted variables is often much stronger than safety requires. If a pedestrian walking far from the robot's path is poorly predicted, expanding the prediction sets around all pedestrians can freeze the robot in place even though a false prediction has a negligible contribution to collision risk.
+
+Conformal decision theory (CDT) \cite{cdt} bypasses prediction sets and calibrates the decision rule itself. The planner is indexed by a conformal control variable $\lambda$ that controls the agent's risk aversion (following the convention in \cite{cdt}, larger $\lambda$ means greater conservatism). Whereas online CDT adjusts $\lambda$ after each step, batch CDT uses a calibration dataset of $n$ historical data points $(X_1,Y_1),\ldots,(X_n,Y_n)$, where $X_i$ records the inputs available to the planner (including any learned predictions) and $Y_i$ records the realized outcome, together with a bounded loss function $\mathcal L(d,Y_i)\in[0,1]$. \Needspace{6\baselineskip}Calibrating $\lambda$ on this dataset requires answering a counterfactual question across calibration data points $i\in\{1,\ldots,n\}$ and candidate parameters $\lambda$:
+\begin{quote}
+\emph{What counterfactual decision $D_i(\lambda)$ would the planner have chosen from input $X_i$ had the conformal control variable been set to $\lambda$, and what realized loss $L_i(\lambda)=\mathcal L(D_i(\lambda),Y_i)$ would that decision have incurred on the observed outcome $Y_i$?}
+\end{quote}
+Selecting the smallest parameter $\widehat\lambda$ whose cumulative loss across the calibration dataset does not exceed $B_n=(n+1)\alpha-1$, guarantees that a future data point $(X_{n+1},Y_{n+1})$ incurs expected loss at most $\alpha$ \cite{cdt,crc} assuming exchangeability. Yet as Lekeufack et al.\ \cite{cdt} point out, computing $\widehat\lambda$ in batch requires iterating through counterfactual decisions across candidate parameters and calibration data points, which becomes a computational bottleneck whenever each planner call $D_i(\lambda)$ solves a trajectory optimization problem or a mathematical program.
+
+In the black-box model (Section~\ref{sec:blackbox}), the planner is queried on a finite grid $\Lambda=\{\lambda_1<\cdots<\lambda_J\}$, and each query $(i,j)$ returns $L_i(\lambda_j)$ at the cost of one planner call. Under nonincreasing realized loss curves, naive binary search over $\Lambda$ evaluates all $n$ data points at $\lceil\log_2 J\rceil$ midpoints, costing $\Theta(n\log J)$ queries. A simple improvement is \emph{certified bisection} (Section~\ref{sec:certified}), which bounds unqueried losses by monotonicity and halts at a midpoint as soon as partial sums certify feasibility or infeasibility (Proposition~\ref{prop:partial}). For binary losses $L_i(\lambda_j)\in\{0,1\}$, each data point is summarized by its last unsafe grid index $\rho_i$, reducing the batch CDT cutoff $\widehat\lambda$ to the $(k+1)$st largest value among $\rho_1,\ldots,\rho_n$, where $k=\lfloor B_n\rfloor$ (Lemma~\ref{lem:order}). Using this reduction, we prove that any exact algorithm requires $\Omega(n+\log J)$ queries in the worst case (Theorem~\ref{thm:lower}), and we give an anchored randomized Quickselect procedure (Algorithm~1) that queries all $n$ data points once at $\lambda_1$ and selects the cutoff in $O(n+\log J\log n)$ expected queries (Theorem~\ref{thm:upper}).
+
+Treating the planner as an opaque black box still leaves two practical questions open. First, why should realized losses be monotone in $\lambda$? Even when increasing $\lambda$ forces the planner to choose routes with larger \emph{predicted} safety margins, prediction errors mean that a route which looks safer to the planner can still collide in $Y_i$, causing $L_i(\lambda)$ to jump from $0$ to $1$ and back to $0$ as $\lambda$ grows. Second, many planners select a decision by maximizing an explicit score over candidate decisions. Section~\ref{sec:affine} studies planners that score a finite candidate set $\mathcal D_i$ by an affine function $a_i(d)+\lambda b_i(d)$. Because the winning decision $D_i(\lambda)$ changes only at intersections along the upper envelope of these score lines, a backward event sweep (Algorithm~2) over optimality intervals from right to left recovers the exact $(k+1)$st largest last unsafe parameter $V_i=\sup\{\lambda\ge0:L_i(\lambda)=1\}$ and preserves the conformal risk bound under the monotone majorant $M_i(\lambda)=\mathbf1\{V_i\ge\lambda\}$ of \cite{crc} without requiring $L_i(\lambda)$ itself to be monotone (Lemma~\ref{lem:sweep} and Corollary~\ref{cor:risk}).
+
+When candidate decisions are defined implicitly as the vertices of a polytope in a parametric linear program (LP), enumerating the full path upfront via the Eisner--Severance method \cite{eisner} takes $2h_i-1$ LP solves for a path of $h_i$ pieces. In Section~\ref{sec:lazy}, we reverse the Eisner--Severance recursion to explore right subintervals before left subintervals, generating optimality intervals from right to left only when Algorithm~2 requests them (Proposition~\ref{prop:lazy}). Throughout the paper, we count \textbf{planner solves} (computing $D_i(\lambda)$ from $X_i$) separately from \textbf{loss evaluations} (testing $D_i(\lambda)$ against $Y_i$, for instance by solving an integer recourse program). Section~\ref{sec:expt} evaluates both costs on public OR-Library benchmarks \cite{orlib,beasley87}, synthetic pedestrian scenes, and the Stanford Drone Dataset scenes of \cite{cdt,sdd}, before Section~\ref{sec:discussion} discusses limitations and related work. All proofs are given in equation form in Appendix~\ref{sec:proofs}.
+
+\section{Problem Setup and Batch Calibration}\label{sec:problem}
+
+Suppose that we have a calibration dataset of $n$ data points $(X_1,Y_1),\ldots,(X_n,Y_n)$ and a future test data point $(X_{n+1},Y_{n+1})$ drawn exchangeably from a common distribution. For each data point $i\in\{1,\ldots,n+1\}$, the input $X_i$ contains the information available to the planner before acting (such as scene obstacles, item profits, and learned predictions), while $Y_i$ records the realized outcome observed afterward. At a conformal control variable $\lambda\ge0$, the planner maps $X_i$ to a decision $D_i(\lambda)$, incurring the realized loss $L_i(\lambda)=\mathcal L(D_i(\lambda),Y_i)\in[0,1]$. Larger values of $\lambda$ encode greater caution. Given a target risk level $\alpha\in(0,1)$ and a candidate grid $\Lambda=\{\lambda_1<\cdots<\lambda_J\}$, the batch CDT rule \cite{cdt,crc} selects the smallest grid parameter whose cumulative calibration loss stays within the budget $B_n$:
+\begin{equation}\label{eq:cdt}
+ B_n=(n+1)\alpha-1,\qquad
+ \widehat\lambda=\min\left\{\lambda_j\in\Lambda:\sum_{i=1}^{n} L_i(\lambda_j)\le B_n\right\}.
+\end{equation}
+The factor $n+1$ in $B_n$ accounts for the unseen test data point $(X_{n+1},Y_{n+1})$ in the conformal rank bound (Corollary~\ref{cor:risk}). If no grid parameter in $\Lambda$ satisfies~\eqref{eq:cdt}, the planner invokes a specified safe fallback decision $\lambda_{J+1}$, corresponding to the eventual-safety condition of \cite{cdt}. Throughout, we assume that $B_n\ge0$.
+
+In Section~\ref{sec:blackbox}, we assume the standard CDT monotonicity condition \cite{cdt,crc} that greater caution never increases realized loss:
+\begin{equation}\label{eq:mono}
+ L_i(\lambda_{j+1})\le L_i(\lambda_j)\qquad\text{for all }i\in\{1,\ldots,n\}\text{ and }j\in\{1,\ldots,J-1\}.
+\end{equation}
+Condition~\eqref{eq:mono} constrains the \emph{realized} loss $L_i(\lambda)$ rather than the planner's predicted score; Section~\ref{sec:affine} drops~\eqref{eq:mono} when the planner's decision path can be recovered across $\lambda$. For binary collision loss $L_i(\lambda)\in\{0,1\}$, let $k=\lfloor B_n\rfloor$, so at most $k$ calibration data points may collide at $\widehat\lambda$. When $n=48$ and $\alpha=0.1$, we have $B_n=3.9$ and $k=3$; ordinary binary search on a grid of $J=129$ parameters makes seven midpoint comparisons, requiring $48\times 7=336$ planner calls if all $48$ data points are evaluated at each midpoint.
+
+\section{Black-Box Calibration on a Parameter Grid}\label{sec:blackbox}
+
+In the black-box query model, the algorithm accesses the planner only by querying pairs $(i,j)\in\{1,\ldots,n\}\times\{1,\ldots,J\}$. Each fresh query $(i,j)$ runs the planner on calibration data point $i$ at parameter $\lambda_j$ and returns $L_i(\lambda_j)$; we cache every queried pair so that no pair $(i,j)$ is ever solved twice.
+
+\subsection{Order-statistic reduction for monotone binary losses}\label{sec:order-stat}
+
+When losses are binary ($L_i(\lambda_j)\in\{0,1\}$) and satisfy the monotonicity condition~\eqref{eq:mono}, each calibration data point $i$ steps down from $1$ to $0$ at most once along $\Lambda$. Its entire loss vector on $\Lambda$ is summarized by its last unsafe grid index:
+\begin{equation}\label{eq:rho}
+ \rho_i=\max\bigl(\{j\in\{1,\ldots,J\}:L_i(\lambda_j)=1\}\cup\{0\}\bigr),
+\end{equation}
+where $\rho_i=0$ when data point $i$ is already safe at $\lambda_1$, and $\rho_i=J$ when it remains unsafe at $\lambda_J$. Write $\rho_{(1)}\ge\rho_{(2)}\ge\cdots\ge\rho_{(n)}$ for the sorted values of $(\rho_1,\ldots,\rho_n)$.
+
+\begin{lemma}[Order-statistic reduction]\label{lem:order}
+Suppose that all losses $L_i(\lambda_j)\in\{0,1\}$ satisfy the monotonicity condition~\eqref{eq:mono}, and let $k=\lfloor B_n\rfloor$. Then the batch CDT cutoff~\eqref{eq:cdt} is
+\begin{equation}\label{eq:stat}
+ \widehat\lambda=\lambda_{\rho_{(k+1)}+1},
+\end{equation}
+where $\lambda_{J+1}$ denotes the safe fallback.
+\end{lemma}
+
+By Lemma~\ref{lem:order}, exact batch calibration reduces to finding the $(k+1)$st largest integer among $\rho_1,\ldots,\rho_n\in\{0,\ldots,J\}$ using threshold queries $L_i(\lambda_j)=\mathbf1\{\rho_i\ge j\}$.
+
+\subsection{Certified bisection for general monotone losses}\label{sec:certified}
+
+For general losses $L_i(\lambda_j)\in[0,1]$, an order statistic of per-point thresholds need not determine $\widehat\lambda$, yet monotonicity~\eqref{eq:mono} still bounds unqueried losses. Let $Q_i\subseteq\Lambda$ be the set of parameters queried so far for calibration data point $i$. At any parameter $\lambda\in\Lambda$, monotonicity implies $\underline L_i(\lambda)\le L_i(\lambda)\le\overline L_i(\lambda)$, where
+\begin{equation}\label{eq:bounds}
+\begin{aligned}
+ \underline L_i(\lambda)
+ &=\max\bigl(\{L_i(q):q\in Q_i,\ q\ge\lambda\}\cup\{0\}\bigr),\\
+ \overline L_i(\lambda)
+ &=\min\bigl(\{L_i(q):q\in Q_i,\ q\le\lambda\}\cup\{1\}\bigr).
+\end{aligned}
+\end{equation}
+At each midpoint $\lambda_m$ of binary search over $\Lambda$, \emph{certified bisection} updates $\sum_{i=1}^n \underline L_i(\lambda_m)$ and $\sum_{i=1}^n \overline L_i(\lambda_m)$ after each query: if $\sum_{i=1}^n \underline L_i(\lambda_m)>B_n$, then $\lambda_m$ is certified infeasible; if $\sum_{i=1}^n \overline L_i(\lambda_m)\le B_n$, then $\lambda_m$ is certified feasible; otherwise we query $L_i(\lambda_m)$ for an unresolved data point $i$ with $\underline L_i(\lambda_m)<\overline L_i(\lambda_m)$.
+
+\begin{proposition}[Exactness of certified bisection]\label{prop:partial}
+Suppose that the losses $L_i(\lambda_j)\in[0,1]$ satisfy the monotonicity condition~\eqref{eq:mono}. Then certified bisection returns the exact batch cutoff $\widehat\lambda$ in~\eqref{eq:cdt} and makes at most $n$ fresh loss queries at each bisection midpoint.
+\end{proposition}
+
+Certified bisection saves little work when binary search visits several feasible midpoints in decreasing order, each below all previously queried parameters: certifying that such a midpoint has at most $k$ binary collisions requires observing at least $n-k$ zeros at that midpoint, since any $k+1$ unqueried data points could otherwise equal $1$. This occurs in the robot diagnostic of Section~\ref{sec:expt}.
+
+\subsection{Worst-case lower bound on black-box queries}\label{sec:lower}
+
+\begin{theorem}[Black-box query lower bound]\label{thm:lower}
+Let $0\le k\le n-2$ and $J\ge3$. Every deterministic black-box algorithm that is exact on all monotone binary instances requires at least
+\begin{equation}\label{eq:lower}
+ n-1+\lceil\log_2(J-1)\rceil
+\end{equation}
+loss queries on some instance. For every randomized black-box algorithm that is exact with probability $1$ on every monotone binary instance, some instance requires at least $n-1+\log_2(J-1)$ loss queries in expectation.
+\end{theorem}
+
+While full bisection can make $\Theta(n\log J)$ queries, Theorem~\ref{thm:lower} shows that $\Omega(n+\log J)$ queries are necessary: any exact algorithm must inspect at least $n-1$ data points and spend $\Omega(\log J)$ threshold queries locating $\rho_{(k+1)}$.
+
+\subsection{Anchored randomized selection}\label{sec:selection}
+
+To match the $\Omega(n+\log J)$ scale when $n$ is large relative to $\log J$, notice that Quickselect on $\rho_1,\ldots,\rho_n$ only needs bisection over $\Lambda$ to find the exact threshold $t=\rho_p$ of one randomly chosen \emph{pivot} data point $p$ per stage; every other active data point $i$ is compared against $t$ using at most two queries, at $\lambda_t$ and $\lambda_{t+1}$. Preceding Quickselect with one endpoint query $L_i(\lambda_1)$ per data point eliminates all data points already safe at $\lambda_1$ ($\rho_i=0$).
+
+\begin{samepage}
+\textbf{Algorithm 1 (Anchored randomized Quickselect).}
+\begin{enumerate}
+\setlength{\itemsep}{2pt}\setlength{\topsep}{3pt}
+\item \textbf{Anchor pass:} Query $L_i(\lambda_1)$ for all $i\in\{1,\ldots,n\}$, and collect the active unsafe indices $U=\{i:L_i(\lambda_1)=1\}$ with $u=|U|$. If $u\le k$, return $\widehat\lambda=\lambda_1$; otherwise set $r=k+1$.
+\item \textbf{Pivot bisection:} Sample a pivot index $p\in U$ uniformly at random, and find its last unsafe grid index $t=\rho_p\in\{1,\ldots,J\}$ by bisection over $\Lambda$, reusing $L_p(\lambda_1)=1$.
+\item \textbf{Three-way partition:} For each $i\in U\setminus\{p\}$, compare $\rho_i$ with $t$ using at most two queries: if $t<J$ and $L_i(\lambda_{t+1})=1$, place $i$ in $U_{>}$; else if $L_i(\lambda_t)=1$, place $i$ in $U_{=}$; otherwise place $i$ in $U_{<}$ (when $t=J$, $U_{>}=\emptyset$ and one query at $\lambda_J$ suffices). Place $p$ in $U_{=}$.
+\item \textbf{Rank update:} If $r\le |U_{>}|$, set $U\leftarrow U_{>}$ and return to Step~2; if $|U_{>}|<r\le |U_{>}|+|U_{=}|$, return $\widehat\lambda=\lambda_{t+1}$; otherwise set $r\leftarrow r-|U_{>}|-|U_{=}|$ and $U\leftarrow U_{<}$, and return to Step~2.
+\end{enumerate}
+\end{samepage}
+
+\begin{theorem}[Expected query complexity of Algorithm~1]\label{thm:upper}
+Suppose that all losses are binary and satisfy~\eqref{eq:mono}. Algorithm~1 returns the exact batch cutoff $\widehat\lambda$. If $u\le1$, it makes at most $n+\lceil\log_2 J\rceil$ queries; if $u\ge2$, its expected number of loss queries is at most
+\begin{equation}\label{eq:upper}
+ \mathbb E[Q]\le n+8u+\lceil\log_2 J\rceil\bigl(2\log_{4/3}u+2\bigr).
+\end{equation}
+In particular, for $0\le k\le n-2$ and $J\ge3$, the ratio of $\mathbb E[Q]$ to the worst-case lower bound in Theorem~\ref{thm:lower} is bounded by a constant whenever $n\ge(\log_2 J)(\log_2 n)$.
+\end{theorem}
+
+Randomized selection need not beat certified bisection on every dataset: when $u\approx n$ on a moderate grid, certified bisection rejects infeasible midpoints after just $k+1$ unsafe queries, whereas Algorithm~1 partitions $U$. When most data points are safe at $\lambda_1$ ($u\ll n$), however, Step~1 discards $n-u$ data points immediately and makes Algorithm~1 much faster.
+
+\section{Calibration from Affine Candidate Scores}\label{sec:affine}
+
+Suppose now that for calibration data point $i$, the planner selects a decision from a finite candidate set $\mathcal D_i$ (independent of $\lambda$) by maximizing an objective affine in $\lambda\ge0$:
+\begin{equation}\label{eq:affine}
+ D_i(\lambda)\in\operatorname*{arg\,max}_{d\in\mathcal D_i}
+ \bigl\{a_i(d)+\lambda b_i(d)\bigr\},
+\end{equation}
+where $a_i(d)$ is the candidate's nominal score and $b_i(d)$ is its predicted safety score. Each candidate $d\in\mathcal D_i$ defines a score line $\lambda\mapsto a_i(d)+\lambda b_i(d)$, and the \emph{solution path} $\lambda\mapsto D_i(\lambda)$ records which candidate wins on the upper envelope as $\lambda$ varies.
+
+\subsection{Upper envelopes and nonmonotone realized losses}\label{sec:hull}
+
+\begin{proposition}[Finite upper-envelope solution path]\label{prop:hull}
+For a planner of the form~\eqref{eq:affine} with $K_i=|\mathcal D_i|$ candidates, the optimal candidate $D_i(\lambda)$ on every open interval of $[0,\infty)$ can be recovered in $O(K_i\log K_i)$ arithmetic operations, partitioning $[0,\infty)$ into at most $K_i$ nonempty open winning intervals.
+\end{proposition}
+
+Sorting the candidate lines by slope $b_i(d)$ and maintaining a stack of undominated lines yields the upper envelope in a single linear pass \cite{deberg,gusfield}. For any $\lambda_1<\lambda_2$, optimality of $D_i(\lambda_1)$ and $D_i(\lambda_2)$ gives
+\begin{equation}\label{eq:slope}
+ (\lambda_2-\lambda_1)\bigl[b_i(D_i(\lambda_2))-b_i(D_i(\lambda_1))\bigr]\ge0,
+\end{equation}
+so the \emph{predicted} safety score $b_i(D_i(\lambda))$ is nondecreasing in $\lambda$. Even so, the \emph{realized} collision loss $L_i(\lambda)=\mathcal L(D_i(\lambda),Y_i)$ can increase with $\lambda$: when predictions in $X_i$ are noisy, a candidate $B$ with larger predicted separation $b_i(B)>b_i(A)$ can still pass too close to a pedestrian's true position in $Y_i$, causing $L_i(\lambda)$ to switch from safe ($0$) to collision ($1$) and back to safe ($0$) on successive intervals (Figure~\ref{fig:nonmono}). Binary search on raw losses has no justification on such curves.
+
+\vspace{4pt}
+\noindent\begin{minipage}{\linewidth}
+\centering
+\setlength{\fboxsep}{0pt}
+{\small
+\begin{tabular}{@{}c@{}}
+\fcolorbox{safeGreen}{safeFill}{\parbox[c][18pt][c]{3.1cm}{\centering $A$: safe ($L_i=0$)}}\hspace{-0.4pt}%
+\fcolorbox{unsafeRed}{unsafeFill}{\parbox[c][18pt][c]{3.4cm}{\centering $B$: collision ($L_i=1$)}}\hspace{-0.4pt}%
+\fcolorbox{safeGreen}{safeFill}{\parbox[c][18pt][c]{3.7cm}{\centering $C$: safe ($L_i=0$)}}\\[4pt]
+\begin{picture}(295,18)
+\put(0,12){\vector(1,0){310}}
+\put(0,9){\line(0,1){6}}
+\put(88,9){\line(0,1){6}}
+\put(184.5,9){\line(0,1){6}}
+\put(289.5,9){\line(0,1){6}}
+\put(-2,0){$0$}
+\put(81.5,0){$0.3$}
+\put(178,0){$0.6$}
+\put(287,0){$1$}
+\put(315,9){$\lambda$}
+\end{picture}
+\end{tabular}}
+\captionof{figure}{Predicted safety increases with $\lambda$, yet realized collision loss can be nonmonotone. Score lines $0$, $\lambda-0.3$, and $2\lambda-0.9$ make candidates $A$, $B$, and $C$ optimal on $(0,0.3)$, $(0.3,0.6)$, and $(0.6,\infty)$; if prediction noise causes $B$ to collide while $A$ and $C$ remain safe, $L_i(\lambda)$ takes values $0,1,0$.}
+\label{fig:nonmono}
+\end{minipage}
+\vspace{4pt}
+
+\subsection{Backward event sweep without monotone realized losses}\label{sec:sweep}
+
+To calibrate validly without assuming monotone realized losses, define for each data point $i$ its last unsafe parameter over $\lambda\ge0$:
+\begin{equation}\label{eq:V}
+ V_i=\sup\{\lambda\ge0:L_i(\lambda)=1\},
+\end{equation}
+taking $V_i=-\infty$ when $L_i(\lambda)=0$ for all $\lambda\ge0$, and $V_i=+\infty$ when collisions persist at arbitrarily large $\lambda$. The step function
+\begin{equation}\label{eq:maj}
+ M_i(\lambda)=\mathbf1\{V_i\ge\lambda\}\ge L_i(\lambda)\qquad\text{for all }\lambda\ge0
+\end{equation}
+is the tightest nonincreasing binary majorant of $L_i(\lambda)$, as used in conformal risk control \cite{crc}. Any parameter $\widetilde\lambda>V_{(k+1)}$ guarantees $\sum_{i=1}^n L_i(\widetilde\lambda)\le\sum_{i=1}^n M_i(\widetilde\lambda)\le k$.
+
+Because $D_i(\lambda)$ and $L_i(\lambda)$ are constant on each open winning interval of the upper envelope, we need not evaluate every winning candidate to find $V_{(k+1)}$. Starting from $+\infty$, Algorithm~2 sweeps backward across all $n$ data points using a max-heap keyed by interval right endpoints: the first unsafe interval encountered for data point $i$ determines $V_i$ and skips all earlier intervals of data point $i$, and the sweep halts once $k+1$ data points have produced a collision. Any candidate selected by the tie rule only at an exact breakpoint is included as a point event at that breakpoint.
+
+\begin{samepage}
+\textbf{Algorithm 2 (Backward event sweep).}
+\begin{enumerate}
+\setlength{\itemsep}{2pt}\setlength{\topsep}{3pt}
+\item \textbf{Initialize heap:} For each data point $i\in\{1,\ldots,n\}$, list its open winning intervals and isolated tie events from left to right on $[0,\infty)$, and insert its rightmost interval (with right endpoint $+\infty$) into a max-heap keyed by right endpoint.
+\item \textbf{Pop and evaluate:} Pop an event with the largest right endpoint $r$, belonging to data point $i$, and evaluate the realized loss $L_i$ of its winning decision.
+\item \textbf{Record or advance:} If $L_i=1$, record $V_i=r$ and stop examining data point $i$; if $k+1$ unsafe data points have been found, halt and return $V_{(k+1)}=r$. If $L_i=0$, push the immediately preceding event of data point $i$ (if any) into the heap and return to Step~2.
+\item \textbf{All-safe termination:} If the heap empties before $k+1$ unsafe data points appear, return $V_{(k+1)}=-\infty$.
+\end{enumerate}
+\end{samepage}
+
+\begin{lemma}[Exactness of the backward event sweep]\label{lem:sweep}
+Suppose that every open winning interval and every isolated tie event on $[0,\infty)$ is listed for each data point $i\in\{1,\ldots,n\}$. Then Algorithm~2 returns the exact order statistic $V_{(k+1)}$ of $V_1,\ldots,V_n$, even when $L_i(\lambda)$ is nonmonotone. If the returned value is $+\infty$, no finite parameter makes the majorants $M_1,\ldots,M_n$ feasible.
+\end{lemma}
+
+\begin{proposition}[Number of loss evaluations in Algorithm~2]\label{prop:sweepcost}
+Suppose that $r=V_{(k+1)}$ is finite and that all finite event right endpoints are distinct. Let $s_i(t)$ count the safe events for data point $i$ with right endpoint strictly greater than $t$. Then Algorithm~2 evaluates the realized loss on exactly
+\begin{equation}\label{eq:sweepcost}
+ Q=k+1+\sum_{i=1}^n s_i\bigl(\max\{r,V_i\}\bigr)
+\end{equation}
+events. Without the distinct-endpoint assumption, the right-hand side of~\eqref{eq:sweepcost} is a lower bound on $Q$; safe events tied at right endpoint $r$ may also be evaluated before termination.
+\end{proposition}
+
+For $Q$ popped events, heap operations take $O(Q\log n)$ time, with $Q\le\sum_{i=1}^n h_i$, where $h_i$ counts the total events of data point $i$. When all candidate scores in $\mathcal D_i$ are supplied explicitly, building the upper envelope still inspects them upfront; we next consider parametric LP planners whose winning decisions can instead be generated as needed.
+
+\subsection{Generating parametric LP solution paths on demand}\label{sec:lazy}
+
+Suppose that for each calibration data point $i$, the planner solves a parametric linear program over a bounded polytope $\mathcal X_i$ independent of $\lambda$:
+\begin{equation}\label{eq:parametric}
+ x_i(\lambda)\in\operatorname*{arg\,min}_{x\in\mathcal X_i}
+ \bigl\{a_i^\top x+\lambda r_i^\top x\bigr\},\qquad 0\le\lambda\le\lambda_{\max},
+\end{equation}
+whose vertices act as the candidates in~\eqref{eq:affine} with minimization in place of maximization. The optimal value function
+\begin{equation}\label{eq:valuepath}
+ \phi_i(\lambda)=\min_{x\in\mathcal X_i}\bigl\{a_i^\top x+\lambda r_i^\top x\bigr\}
+\end{equation}
+is concave and piecewise linear on $[0,\lambda_{\max}]$; we assume a unique optimal vertex on each open linear piece.
+
+Write $f_x(\lambda)=a_i^\top x+\lambda r_i^\top x$. In the method of Eisner and Severance \cite{eisner}, given optimal vertices $x_\ell$ and $x_u$ at $\ell<u$ with $r_i^\top x_\ell>r_i^\top x_u$, their score lines intersect at $t=(a_i^\top x_u-a_i^\top x_\ell)/(r_i^\top x_\ell-r_i^\top x_u)\in[\ell,u]$. One LP solve at $\lambda=t$ tests whether $x_\ell$ and $x_u$ are adjacent on the lower envelope:
+\begin{equation}\label{eq:intersection}
+ \phi_i(t)=f_{x_\ell}(t)=f_{x_u}(t).
+\end{equation}
+If~\eqref{eq:intersection} holds, $t$ is their breakpoint; otherwise the new optimal vertex $x_i(t)$ splits $[\ell,u]$ into $[\ell,t]$ and $[t,u]$. Enumerating all $h_i\ge2$ pieces requires $2h_i-1$ LP solves.
+
+To supply Algorithm~2 on demand, we first solve~\eqref{eq:parametric} only at $\lambda_{\max}$ and hand the rightmost interval to the sweep. Only if that decision is evaluated and found safe do we solve at $\lambda=0$ and run the intersection test~\eqref{eq:intersection}, always exploring the \emph{right} subinterval $[t,u]$ before $[\ell,t]$ and pausing as soon as the next rightmost interval is certified. If data point $i$ is unsafe at $\lambda_{\max}$, no second LP solve is needed for that data point.
+
+\begin{proposition}[On-demand parametric LP path generation]\label{prop:lazy}
+Assume unique optimal vertices on the open pieces of $\phi_i$, a tie rule selecting an adjacent interval optimum at each breakpoint, and exact comparisons in~\eqref{eq:intersection}. Then the reversed recursion emits the exact winning intervals of data point $i$ in decreasing order of their right endpoints. If only the rightmost interval is requested, $1$ LP solve is performed; if $m_i\ge2$ intervals are emitted, the number of LP solves for data point $i$ is at most
+\begin{equation}\label{eq:lazy-bound}
+ 2m_i+s_i,\qquad 0\le s_i\le h_i-m_i,
+\end{equation}
+where $s_i$ counts optimal lines discovered at interior split tests but not yet emitted.
+\end{proposition}
+
+Proposition~\ref{prop:sweepcost} bounds the loss evaluations, while Proposition~\ref{prop:lazy} bounds the LP solves. On a bounded range $[0,\lambda_{\max}]$, a cutoff $V_{(k+1)}=\lambda_{\max}$ invokes the specified safe fallback.
+
+\subsection{Finite-sample conformal risk control}\label{sec:risk}
+
+\begin{corollary}[Collision-risk bound]\label{cor:risk}
+Suppose that the complete binary loss curves $\{L_i(\lambda):\lambda\ge0\}$ of the $n$ calibration data points and the future test data point $i=n+1$ are exchangeable, and assume that a collision-free fallback exists. Let $k=\lfloor(n+1)\alpha-1\rfloor\ge0$. If we choose $\widetilde\lambda>V_{(k+1)}$ when $V_{(k+1)}<\lambda_{\max}$ and invoke the fallback otherwise, then
+\begin{equation}\label{eq:risk}
+ \Pr\bigl\{L_{n+1}(\widetilde\lambda)=1\bigr\}\le\frac{k+1}{n+1}\le\alpha.
+\end{equation}
+\end{corollary}
+
+\section{Experiments}\label{sec:expt}
+
+We evaluate our methods on two families of public combinatorial optimization problems from Beasley's OR-Library \cite{orlib,beasley87}---first for black-box grid calibration with monotone losses, and then for continuous calibration on $[0,1]$ where evaluating each realized loss requires solving integer recourse programs and the resulting loss curves can be nonmonotone---followed by synthetic pedestrian scenes and a diagnostic on the Stanford Drone Dataset scenes of \cite{cdt,sdd}. Code and reproduction scripts are at \href{https://github.com/ImperatorAvrelianvs/batch-cdt}{\texttt{github.com/ImperatorAvrelianvs/batch-cdt}}.
+
+\subsection{Black-box grid calibration on public OR-Library data}\label{sec:public}
+
+Our first experiment uses the multidimensional knapsack (\texttt{mknap2}) and set-covering (\texttt{scp41}--\texttt{scp410}) instances from the OR-Library \cite{orlib,beasley87}. For each calibration data point $i\in\{1,\ldots,48\}$, let $\mathcal X_i$ be the feasible polytope of the linear-programming relaxation $0\le x\le 1$, and define the planner and binary loss by
+\begin{equation}\label{eq:lpbench}
+ x_i(\lambda)\in\operatorname*{arg\,min}_{x\in\mathcal X_i}
+ \bigl\{a_i^\top x+\lambda r_i^\top x\bigr\},\qquad
+ L_i(\lambda)=\mathbf 1\bigl\{r_i^\top x_i(\lambda)>\tau_i\bigr\}.
+\end{equation}
+Because the published benchmarks supply optimization coefficients rather than safety labels, we define $L_i(\lambda)$ in~\eqref{eq:lpbench} by thresholding $r_i^\top x_i(\lambda)$. Optimality at $\lambda_1<\lambda_2$ implies $r_i^\top x_i(\lambda_2)\le r_i^\top x_i(\lambda_1)$, so these loss curves satisfy~\eqref{eq:mono}.
+
+For knapsack, the $48$ instances in \texttt{mknap2} form the $n=48$ calibration data points: under constraints $A_i x\le b_i$, we take $a_i$ to be the negative profit vector divided by total profit, $r_i$ to be the share of the first resource consumed, and $\tau_i=0.75$. For set covering, ten $200\times 1000$ incidence matrices (\texttt{scp41}--\texttt{scp410}) provide the data; we sample $80$ required rows per data point (with a fixed seed recorded in the code) to form $48$ calibration data points, minimizing the number of selected columns divided by $25$ plus $\lambda$ times the total column cost divided by $150$, with threshold $\tau_i=2.5$. Both thresholds place $\widehat\lambda$ in the interior of the grid.
+
+We calibrate over $J=129$ equally spaced grid points on $[0,1]$ with $n=48$ and $\alpha=0.1$ ($k=3$). Each uncached query solves one LP via the HiGHS solver in SciPy. Table~\ref{tab:public} reports LP solve counts and elapsed times over $11$ runs with randomized procedure order after an untimed warmup call.
+
+\vspace{4pt}
+\noindent\begin{minipage}{\linewidth}
+\captionof{table}{Exact grid calibration on OR-Library benchmarks ($n=48$, $J=129$, $\alpha=0.1$, $k=3$). Entries show LP solves and elapsed seconds (mean $\pm$ sample standard deviation over $11$ runs). Every procedure returns the exact cutoff: $0.328125$ for knapsack and $0.6015625$ for set covering.}
+\label{tab:public}
+\vspace{2pt}
+\centering\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+& \multicolumn{2}{c}{Knapsack (\texttt{mknap2})} & \multicolumn{2}{c}{Set covering (\texttt{scp41}--\texttt{scp410})} \\
+\cmidrule(lr){2-3}\cmidrule(l){4-5}
+Procedure & LP solves & Time (s) & LP solves & Time (s) \\
+\midrule
+Ordinary bisection & 336 & $0.291\pm0.004$ & 336 & $0.972\pm0.013$ \\
+Certified bisection & \textbf{158} & $\mathbf{0.137\pm0.002}$ & \textbf{115} & $\mathbf{0.335\pm0.010}$ \\
+Anchored bisection & 198 & $0.171\pm0.002$ & 163 & $0.649\pm0.019$ \\
+Anchored randomized selection & $197.1\pm58.0$ & $0.167\pm0.051$ & $214.7\pm52.5$ & $0.896\pm0.213$ \\
+\bottomrule
+\end{tabular}
+\end{minipage}
+\vspace{4pt}
+
+Certified bisection uses $53\%$ fewer LP solves than ordinary bisection on knapsack and $66\%$ fewer on set covering, reducing wall-clock time proportionally. Why is randomized selection slower here despite its asymptotic guarantee in Theorem~\ref{thm:upper}? At $\tau_i=2.5$ in set covering, nearly all $48$ data points are unsafe at $\lambda_1=0$, so the anchor pass discards almost nothing ($u\approx n$), while certified bisection rejects infeasible midpoints after just $k+1=4$ unsafe queries. Raising the set-covering threshold from $2.5$ to $7.0$ reverses the comparison: most data points become safe at $\lambda_1=0$, causing certified bisection's solve count to climb from $115$ to $274$ while anchored bisection uses $166$ solves and anchored selection averages $89$ queries (using cached $48\times 129$ LP solutions).
+
+\subsection{Continuous calibration with costly integer-recourse losses}\label{sec:lazy-exp}
+
+Our second experiment retains the OR-Library instances and the parametric LP planner in~\eqref{eq:lpbench} over the continuous range $\lambda\in[0,1]$ (adding a relative perturbation of at most $10^{-3}$ to $a_i$ to prevent degenerate ties), but evaluates each fractional plan $x_i(\lambda)$ through an integer optimization problem whose realized loss need not be monotone in $\lambda$:
+\begin{enumerate}
+\setlength{\itemsep}{2pt}\setlength{\topsep}{3pt}
+\item \textbf{Knapsack rounding under noisy resource weights:} A mixed-integer program (MILP) rounds $x_i(\lambda)$ to the nearest feasible binary vector $z_i(\lambda)\in\{0,1\}^{d_i}$ in $\ell_1$ distance, and resource consumption is evaluated after multiplying each coefficient of $r_i$ by an independent log-normal factor $\exp(\sigma\xi_{i,m}-\tfrac12\sigma^2)$ with $\sigma=0.15$:
+\begin{equation}\label{eq:knap-loss}
+ L_i(\lambda)=\mathbf1\bigl\{(r_i^{\mathrm{true}})^\top z_i(\lambda)>\tau_i\bigr\}.
+\end{equation}
+\item \textbf{Two-stage set covering with integer recourse:} Each of the $80$ predicted requirements in $X_i$ materializes with probability $0.8$, while each remaining row materializes with probability $0.5$. An integer set-covering MILP repairs any realized requirement left uncovered by $x_i(\lambda)$ at minimum column cost $R_{it}(x_i(\lambda))$ on realization $t\in\{1,\ldots,T\}$, and the binary loss checks whether the planned cost plus mean repair cost exceeds $\tau_i$:
+\begin{equation}\label{eq:cover-loss}
+ L_i(\lambda)=\mathbf1\left\{
+ \frac{c_i^\top x_i(\lambda)+T^{-1}\sum_{t=1}^T R_{it}(x_i(\lambda))}{150}
+ >\tau_i\right\}.
+\end{equation}
+\end{enumerate}
+
+Table~\ref{tab:lazy} compares three exact procedures at $n=48$ and $k=3$: (i) full path enumeration with all interval losses evaluated; (ii) full path enumeration followed by the backward sweep (Algorithm~2); and (iii) on-demand path generation coupled to Algorithm~2. For each task, $\tau_i$ is chosen from $17$ empirical cost quantiles to place $r=V_{(4)}$ closest to $0.5$.
+
+\vspace{4pt}
+\noindent\begin{minipage}{\linewidth}
+\centering\small
+\captionof{table}{Continuous calibration on $[0,1]$ for OR-Library parametric LPs with MILP losses ($n=48$, $\alpha=0.1$, $k=3$). The first two timings sum separately recorded LP-path and MILP evaluation times; the on-demand procedure is timed end to end (three runs, or one run for $T=10$). All procedures return the exact same cutoff $V_{(4)}$.}
+\label{tab:lazy}
+\vspace{2pt}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}llrrr@{}}
+\toprule
+Task & Procedure & LP solves & Loss evaluations & Time (s)\\
+\midrule
+Knapsack ($V_{(4)}=0.4985$) & Full path, all losses & 2,498 & 1,273 & 5.01 \\
+& Full path, backward sweep & 2,498 & 420 & 3.82 \\
+& On-demand path, backward sweep & \textbf{999} & \textbf{420} & \textbf{2.71} \\
+\addlinespace[3pt]
+Set cover, $T=1$ ($V_{(4)}=0.4295$) & Full path, all losses & 23,128 & 11,588 & 389.0 \\
+& Full path, backward sweep & 23,128 & 368 & 284.2 \\
+& On-demand path, backward sweep & \textbf{961} & \textbf{368} & \textbf{8.4} \\
+\addlinespace[3pt]
+Set cover, $T=10$ ($V_{(4)}=0.5454$) & Full path, all losses & 23,128 & 11,588 & 1,358.3 \\
+& Full path, backward sweep & 23,128 & 257 & 301.7 \\
+& On-demand path, backward sweep & \textbf{750} & \textbf{257} & \textbf{18.2} \\
+\bottomrule
+\end{tabular}
+\end{minipage}
+\vspace{4pt}
+
+Four knapsack data points and five set-covering data points exhibit nonmonotone loss curves, and independent LP solves at $48$ randomly sampled parameters match the enumerated paths without error. In set covering with $T=1$, the backward sweep cuts MILP loss evaluations from $11{,}588$ to $368$, while generating the path on demand cuts LP solves from $23{,}128$ to $961$ ($750$ for $T=10$), finishing in $8.4$~s ($18.2$~s for $T=10$). Because the full-path times in Table~\ref{tab:lazy} sum separately recorded stages, their ratios to the end-to-end on-demand times are not controlled speedup ratios. As $\tau_i$ shifts $V_{(4)}$ toward $\lambda=0$, the sweep inspects more of the path: across the $17$ quantile thresholds, on-demand LP solves range from $370$ to $1{,}636$ (of $2{,}498$) on knapsack for $V_{(4)}\in[0.30,0.91]$, and from $538$ to $17{,}386$ (of $23{,}128$) on set covering ($T=1$) for $V_{(4)}\in[0.02,0.67]$.
+
+\subsection{Synthetic pedestrian scenes and Stanford Drone Dataset diagnostics}\label{sec:diagnostics}
+
+We also simulate exchangeable pedestrian scenes, each containing $1+\mathrm{Poisson}(2)$ pedestrians with true lateral positions drawn from $\mathcal N(0,4)$ and predicted positions corrupted by independent $\mathcal N(0,\sigma^2)$ noise. The planner selects among $400$ offsets $x_d\in[-5,5]$ to maximize $a_i(d)+\lambda b_i(d)$, where $a_i(d)\approx 10-0.3x_d^2$ (with small tie-breaking perturbations) and $b_i(d)$ is the smallest predicted separation; a collision occurs when true separation is below $0.8$. Over $180$ independent calibration draws per setting, Algorithm~2 matches exhaustive evaluation while avoiding $40.3\%$--$93.7\%$ of loss evaluations after the upper envelopes are built (Table~\ref{tab:sweep} in Appendix~\ref{sec:details}). Across $3{,}000$ paired draws with $n=48$ and $\sigma=1$, continuous calibration via Corollary~\ref{cor:risk} yields a held-out collision rate of $7.27\%$ and mean progress $4.000$, while a range-doubling grid calibrated on the majorant~\eqref{eq:maj} gives $7.23\%$ and $3.988$; searching raw nonmonotone losses on a grid lacks this risk guarantee.
+
+On $48$ overlapping scenes from the Stanford Drone Dataset \cite{cdt,sdd}, the candidate spline envelopes contain $517$ optimal intervals on $[0,\infty)$ ($494$ on $[0,1]$), and Algorithm~2 evaluates $259$ collision losses to recover $V_{(4)}=0.0271424$. With the feasible candidate splines and obstacle distances computed once and shared across procedures, both exhaustive evaluation and the sweep take about $0.29$~s because planar collision checks are too cheap to shift total runtime; because the video frames overlap temporally, these scenes do not form an exchangeable sample.
+
+\section{Discussion}\label{sec:discussion}
+
+Theorem~\ref{thm:lower} rules out $o(n+\log J)$ exact black-box calibration. On the finite grids tested in Table~\ref{tab:public}, certified bisection is simpler and faster than randomized selection whenever most data points are unsafe at $\lambda_1$, whereas anchored selection becomes effective when many data points are already safe at $\lambda_1$ (as in the robot diagnostic, where $37$ of $48$ scenes are safe at $\lambda=0$) or when $n$ and $J$ are large.
+
+When the planner exposes affine candidate scores, examining breakpoints where the chosen decision actually changes is far more informative than probing arbitrary grid parameters: Algorithm~2 skips losses to the left of each data point's last collision and remains exact under the majorant~\eqref{eq:maj} even when realized losses are nonmonotone. For parametric LPs, reversing the Eisner--Severance recursion \cite{eisner} halts path construction itself once calibration is settled.
+
+Several limitations bear emphasis. Our OR-Library benchmarks use LP relaxations and thresholded recourse losses to measure solver and evaluation counts; runtime gains depend on the relative cost of LP solves versus loss evaluations and shrink when the cutoff lies near $\lambda=0$. In addition, our path algorithms rely on affine dependence on $\lambda$ over a fixed feasible set $\mathcal X_i$; nonlinear objectives or $\lambda$-dependent constraints require different path-following methods. Finally, computational savings do not replace statistical assumptions: the risk bound in Corollary~\ref{cor:risk} requires exchangeable data points and a safe fallback, whereas temporally overlapping scenes require nonexchangeable extensions \cite{nonexchangeable}.
+
+\paragraph{Related work.}
+CDT calibrates decisions rather than prediction sets \cite{cdt}, and our nonmonotone binary guarantee uses the monotone majorant of conformal risk control \cite{crc}. Learn-then-Test \cite{ltt} and Pareto testing \cite{pareto} calibrate general risks on finite grids via multiple hypothesis tests. Upper envelopes and parametric LP paths are classical \cite{deberg,gusfield,eisner,megiddo}, and homotopy paths have been used to accelerate full-conformal prediction \cite{lei2019,li2024,speedcp}; here the solution path determines which counterfactual decisions must be evaluated, and for parametric LPs the path itself is constructed only as far as calibration requires.
+
+\appendix
+\section{Mathematical Proofs}\label{sec:proofs}
+
+\begin{proof}[Proof of Lemma~\ref{lem:order}]
+By~\eqref{eq:mono} and~\eqref{eq:rho}, $L_i(\lambda_j)=\mathbf1\{\rho_i\ge j\}$ for all $i\in\{1,\ldots,n\}$ and $j\in\{1,\ldots,J\}$. Summing over $i=1,\ldots,n$ with $k=\lfloor B_n\rfloor$ gives
+\begin{equation}\label{eq:proof-lem31-equiv}
+ \sum_{i=1}^n L_i(\lambda_j)\le B_n
+ \iff \bigl|\{i\in\{1,\ldots,n\}:\rho_i\ge j\}\bigr|\le k
+ \iff j>\rho_{(k+1)}.
+\end{equation}
+Minimizing over $j\in\{1,\ldots,J\}$ in~\eqref{eq:proof-lem31-equiv} yields $\widehat\lambda=\lambda_{\rho_{(k+1)}+1}$ (with $\lambda_{J+1}$ when $\rho_{(k+1)}=J$).
+\end{proof}
+
+\begin{proof}[Proof of Proposition~\ref{prop:partial}]
+By~\eqref{eq:mono} and~\eqref{eq:bounds}, $0\le \underline L_i(\lambda_m)\le L_i(\lambda_m)\le \overline L_i(\lambda_m)\le 1$ for all $i\in\{1,\ldots,n\}$. Summing over $i$ yields
+\begin{equation}\label{eq:proof-prop32-sum}
+ \underline S(\lambda_m)\coloneqq\sum_{i=1}^n \underline L_i(\lambda_m)
+ \le \sum_{i=1}^n L_i(\lambda_m)
+ \le \sum_{i=1}^n \overline L_i(\lambda_m)\eqqcolon\overline S(\lambda_m),
+\end{equation}
+so $\overline S(\lambda_m)\le B_n \implies \sum_{i=1}^n L_i(\lambda_m)\le B_n$ and $\underline S(\lambda_m)>B_n \implies \sum_{i=1}^n L_i(\lambda_m)>B_n$. Whenever $\underline S(\lambda_m)\le B_n<\overline S(\lambda_m)$, some $i$ has $\underline L_i(\lambda_m)<\overline L_i(\lambda_m)$ ($\lambda_m\notin Q_i$); querying $(i,m)$ sets $\underline L_i(\lambda_m)=\overline L_i(\lambda_m)=L_i(\lambda_m)$, resolving $\lambda_m$ in at most $n$ fresh queries.
+\end{proof}
+
+\begin{proof}[Proof of Theorem~\ref{thm:lower}]
+For each $t\in\{1,\ldots,J-1\}$, consider the monotone binary instance $I^{(t)}$ with threshold vector
+\begin{equation}\label{eq:proof-thm33-inst}
+ \rho^{(t)}=\bigl(\underbrace{J,\ldots,J}_{k},\,t,\,\underbrace{0,\ldots,0}_{n-k-1}\bigr),
+ \qquad\text{so that}\qquad
+ \rho_{(k+1)}^{(t)}=t\quad\text{and}\quad\widehat\lambda(I^{(t)})=\lambda_{t+1}.
+\end{equation}
+Let $q_i$ count the queries made to data point $i$. If $q_{i^*}=0$ for some $i^*\ne k+1$, then flipping $\rho_{i^*}^{(t)}$ alters the cutoff without changing any observed query response:
+\begin{equation}\label{eq:proof-thm33-flip}
+\begin{aligned}
+ i^*\in\{1,\ldots,k\},\ q_{i^*}=0 &\implies \widetilde\rho=\rho^{(t)}-J e_{i^*}\text{ has }\widetilde\rho_{(k+1)}=0\ (\widehat\lambda=\lambda_1\ne\lambda_{t+1}),\\
+ i^*\in\{k+2,\ldots,n\},\ q_{i^*}=0 &\implies \widetilde\rho=\rho^{(t)}+J e_{i^*}\text{ has }\widetilde\rho_{(k+1)}=J\ (\widehat\lambda=\lambda_{J+1}\ne\lambda_{t+1}).
+\end{aligned}
+\end{equation}
+Exactness with probability $1$ forces $q_i\ge 1$ for all $i\ne k+1$, so $\sum_{i\ne k+1}q_i\ge n-1$. On $\{I^{(t)}:1\le t\le J-1\}$, queries to $i\ne k+1$ do not depend on $t$, while each query to $i=k+1$ gives one bit $L_{k+1}(\lambda_j)=\mathbf1\{t\ge j\}$ to distinguish the $J-1$ values of $t$. A binary decision tree with $J-1$ leaves has depth at least $\lceil\log_2(J-1)\rceil$ in the worst case and at least $\log_2(J-1)$ in expectation under $t\sim\mathrm{Unif}\{1,\ldots,J-1\}$, giving
+\begin{equation}\label{eq:proof-thm33-final}
+ \max_{1\le t\le J-1} Q_{\mathrm{det}}(I^{(t)})\ge n-1+\lceil\log_2(J-1)\rceil,\qquad
+ \sup_{I}\mathbb E[Q(I)]\ge \frac{1}{J-1}\sum_{t=1}^{J-1}\mathbb E[Q(I^{(t)})]\ge n-1+\log_2(J-1).
+\end{equation}
+\end{proof}
+
+\begin{proof}[Proof of Theorem~\ref{thm:upper}]
+Step~1 makes $n$ queries at $\lambda_1$ to identify $U=\{i:\rho_i\ge 1\}$ of size $u=|U|$. If $u\le k$, then $\rho_{(k+1)}=0$ and $\widehat\lambda=\lambda_1$; if $u=1$ and $k=0$, Step~2 finds $\rho_p$ by bisection in at most $\lceil\log_2 J\rceil$ queries, giving $Q\le n+\lceil\log_2 J\rceil$.
+
+For $u\ge 2$ and $u>k$, Step~3 partitions $U$ around $t=\rho_p$ into
+\begin{equation}\label{eq:proof-thm34-part}
+ U_{>}=\{i\in U:\rho_i>t\},\qquad
+ U_{=}=\{i\in U:\rho_i=t\},\qquad
+ U_{<}=\{i\in U:\rho_i<t\}
+\end{equation}
+using at most $2$ queries per comparison with the pivot. With $S$ denoting the number of pivot stages and $K_u$ the total number of comparisons in three-way Quickselect on $U$, the query count satisfies $Q \le n + \lceil\log_2 J\rceil S + 2K_u$. Standard Quickselect analysis \cite{knuth} gives $\mathbb E[K_u]\le 4u$, and because a uniform pivot falls in the central half of sorted ranks with probability at least $1/2$ (shrinking the active set by at least $3/4$), we have
+\begin{equation}\label{eq:proof-thm34-stages}
+ \mathbb E[S]\le 2\log_{4/3}u+2
+ \implies
+ \mathbb E[Q]\le n+8u+\lceil\log_2 J\rceil\bigl(2\log_{4/3}u+2\bigr).
+\end{equation}
+Since $u\le n$, having $n\ge(\log_2 J)(\log_2 n)$ gives $\mathbb E[Q]=O(n+\log J)$.
+\end{proof}
+
+\begin{proof}[Proof of Proposition~\ref{prop:hull}]
+Retaining one maximal-intercept line per distinct slope and sorting the remaining $m\le K_i$ candidates so that $b_i(d_1)<\cdots<b_i(d_m)$ takes $O(K_i\log K_i)$ operations. Any two lines $b_i(d)<b_i(d')$ intersect at
+\begin{equation}\label{eq:proof-prop41-tau}
+ \tau(d,d')=\frac{a_i(d)-a_i(d')}{b_i(d')-b_i(d)},
+ \qquad\text{where}\qquad
+ a_i(d')+\lambda b_i(d') > a_i(d)+\lambda b_i(d)\iff \lambda>\tau(d,d').
+\end{equation}
+Inserting $d_1,\ldots,d_m$ into an envelope stack $(s_1,\ldots,s_q)$ pops $s_q$ before pushing $d_r$ whenever $s_q$ is dominated on $[0,\infty)$ by $\max\{f_{s_{q-1}},f_{d_r}\}$, namely when $\tau(s_{q-1},s_q)\ge\tau(s_q,d_r)$ or $\tau(s_q,d_r)\le 0$. Each line is pushed once and popped at most once in $O(K_i)$ stack operations, leaving at most $K_i$ winning intervals.
+\end{proof}
+
+\begin{proof}[Proof of Lemma~\ref{lem:sweep}]
+Let $\mathcal E_i=(E_{i,1},\ldots,E_{i,h_i})$ be the events of data point $i$ ordered by nondecreasing right endpoints $0<r_{i,1}\le\cdots\le r_{i,h_i}=+\infty$. Since $L_i(\lambda)$ is constant on each event $E_{i,m}$, definition~\eqref{eq:V} reduces to
+\begin{equation}\label{eq:proof-lem42-vi}
+ V_i=\max\bigl(\{r_{i,m}:1\le m\le h_i,\ L_i(E_{i,m})=1\}\cup\{-\infty\}\bigr).
+\end{equation}
+Algorithm~2 inspects $\mathcal E_i$ in nonincreasing order of $r_{i,m}$ and stops on data point $i$ at its first unsafe event, whose right endpoint is $V_i$. When the $(k+1)$st unsafe data point is popped at key $r$, the set $H$ of halted unsafe data points satisfies $|H|=k+1$ and
+\begin{equation}\label{eq:proof-lem42-order}
+ \min_{i\in H}V_i = r,\qquad
+ \max_{j\notin H}V_j \le \max_{j\notin H} r_{j,\mathrm{top}(j)} \le r
+ \implies V_{(k+1)}=r.
+\end{equation}
+If the heap empties with $|H|\le k$, then $V_j=-\infty$ for all $j\notin H$, so $V_{(k+1)}=-\infty$.
+\end{proof}
+
+\begin{proof}[Proof of Proposition~\ref{prop:sweepcost}]
+Decompose the evaluated events into unsafe and safe evaluations:
+\begin{equation}\label{eq:proof-prop43-part}
+ Q=\sum_{i=1}^n \bigl|\{m:E_{i,m}\text{ popped},\ L_i(E_{i,m})=1\}\bigr|
+ +\sum_{i=1}^n \bigl|\{m:E_{i,m}\text{ popped},\ L_i(E_{i,m})=0\}\bigr|.
+\end{equation}
+The first sum is $k+1$ because Algorithm~2 halts at the $(k+1)$st unsafe event $r=V_{(k+1)}$. When finite endpoints are distinct, a safe event $E_{i,m}$ is popped before termination at $r$ if and only if $r_{i,m}>V_i$ and $r_{i,m}>r$, or equivalently $r_{i,m}>\max\{r,V_i\}$, which counts $s_i(\max\{r,V_i\})$ safe events for data point $i$ and proves~\eqref{eq:sweepcost}. If endpoints tie at $r$, safe events with $r_{i,m}=r>V_i$ may also be popped before the $(k+1)$st unsafe event at $r$.
+\end{proof}
+
+\begin{proof}[Proof of Proposition~\ref{prop:lazy}]
+At each unresolved interval $[\ell,u]$ with endpoint optima $(x_\ell,x_u)$, the test point $t=(a_i^\top x_u-a_i^\top x_\ell)/(r_i^\top x_\ell-r_i^\top x_u)$ is identical to complete enumeration, and processing $[t,u]$ before $[\ell,t]$ emits the pieces of $\phi_i$ in decreasing order of right endpoints by induction on the recursion tree.
+
+If only the rightmost interval is requested, only the solve at $\lambda_{\max}$ is performed. For $m_i\ge 2$ emitted intervals, partitioning the LP solves by their role in the recursion tree gives
+\begin{equation}\label{eq:proof-prop44-count}
+ N_{\mathrm{LP},i}
+ =\underbrace{2}_{\text{endpoints }0,\lambda_{\max}}
+ +\underbrace{(m_i-1)}_{\text{certified breakpoints }\phi_i(t)=f_{x_\ell}(t)}
+ +\underbrace{(m_i-1+s_i)}_{\text{interior splits }\phi_i(t)<f_{x_\ell}(t)}
+ =2m_i+s_i.
+\end{equation}
+Because $\phi_i$ has $h_i$ total pieces ($h_i-2$ interior pieces), the $m_i-1$ emitted interior pieces plus the $s_i$ discovered but unemitted pieces on the stack satisfy $m_i-1+s_i\le h_i-1$, so $0\le s_i\le h_i-m_i$.
+\end{proof}
+
+\begin{proof}[Proof of Corollary~\ref{cor:risk}]
+Exchangeability of the loss curves $\{L_i(\lambda):\lambda\ge0\}$ implies exchangeability of $(V_1,\ldots,V_{n+1})$. When $V_{(k+1)}<\lambda_{\max}$, choosing $\widetilde\lambda>V_{(k+1)}$ gives, by~\eqref{eq:maj},
+\begin{equation}\label{eq:proof-cor45-event}
+ L_{n+1}(\widetilde\lambda)\le M_{n+1}(\widetilde\lambda)=\mathbf1\{V_{n+1}\ge\widetilde\lambda\}\le\mathbf1\{V_{n+1}>V_{(k+1)}\},
+\end{equation}
+whereas for $V_{(k+1)}\ge\lambda_{\max}$ the collision-free fallback yields $L_{n+1}=0$. Taking probabilities in~\eqref{eq:proof-cor45-event} and applying the exchangeability rank inequality gives
+\begin{equation}\label{eq:proof-cor45-prob}
+ \Pr\bigl\{L_{n+1}(\widetilde\lambda)=1\bigr\}
+ \le\Pr\bigl\{V_{n+1}>V_{(k+1)}\bigr\}
+ \le\frac{k+1}{n+1}
+ =\frac{\lfloor(n+1)\alpha-1\rfloor+1}{n+1}
+ \le\alpha.
+\end{equation}
+\end{proof}
+
+\section{Further Experimental Details}\label{sec:details}
+
+\vspace{2pt}
+\noindent\begin{minipage}{\linewidth}
+\centering\small
+\captionof{table}{Synthetic exchangeable pedestrian simulation across $180$ independent calibration draws per setting ($\alpha=0.1$). All $400$ candidate score lines per scene are converted to upper envelopes before comparing exhaustive evaluation against Algorithm~2.}
+\label{tab:sweep}
+\vspace{2pt}
+\begin{tabular}{@{}rrrrr@{}}
+\toprule
+$\sigma$ & $n$ & All winning intervals & Backward sweep & Loss evaluations saved\\
+\midrule
+0 & 48  & 997   & 555   & 44.4\% \\
+0 & 200 & 4,109 & 2,455 & 40.3\% \\
+1 & 48  & 962   & 61    & 93.7\% \\
+1 & 200 & 4,017 & 256   & 93.6\% \\
+\bottomrule
+\end{tabular}
+\end{minipage}
+\vspace{4pt}
+
+In the Stanford Drone Dataset diagnostic (\texttt{nexus\_4}, $n=48$, $k=3$), $37$ of the $48$ scenes are safe at $\lambda=0$. On the $129$-point grid, full bisection uses $336$ loss queries, certified bisection uses $235$, anchored bisection uses $98$, and anchored selection (Algorithm~1) averages $96.4$ over $300$ seeds. On $[0,\infty)$, the backward sweep selects $\widetilde\lambda=0.027193>V_{(4)}=0.0271424$; with candidate splines and obstacle distances computed once and shared across methods, exhaustive evaluation takes $0.2916\pm0.0040$~s and the sweep takes $0.2895\pm0.0018$~s, so the savings from the sweep alone are smaller than run-to-run timing variation.
+
+An independent rerun of the continuous knapsack experiment on a second machine returned the exact same $2{,}498$ and $999$ LP solves and $1{,}273$ and $420$ loss evaluations, matching the cutoff in Table~\ref{tab:lazy}, with a reconstructed full-path time of $7.78$~s and a measured on-demand time of $2.91$~s averaged over three runs.
+
+\begin{thebibliography}{20}
+\bibitem{cdt} J. Lekeufack, A. N. Angelopoulos, A. Bajcsy, M. I. Jordan,
+and J. Malik, ``Conformal Decision Theory: Safe Autonomous Decisions from
+Imperfect Predictions,'' \emph{IEEE International Conference on Robotics
+and Automation}, 2024. \href{https://arxiv.org/abs/2310.05921}{arXiv:2310.05921}.
+
+\bibitem{crc} A. N. Angelopoulos, S. Bates, A. Fisch, L. Lei, and
+T. Schuster, ``Conformal Risk Control,'' \emph{International Conference
+on Learning Representations}, 2024.
+\href{https://arxiv.org/abs/2208.02814}{arXiv:2208.02814}.
+
+\bibitem{ltt} A. N. Angelopoulos, S. Bates, E. J. Cand\`es, M. I. Jordan,
+and L. Lei, ``Learn then Test: Calibrating Predictive Algorithms to Achieve
+Risk Control,'' 2021. \href{https://arxiv.org/abs/2110.01052}{arXiv:2110.01052}.
+
+\bibitem{pareto} B. Laufer-Goldshtein, A. Fisch, R. Barzilay, and
+T. Jaakkola, ``Efficiently Controlling Multiple Risks with Pareto Testing,''
+2022. \href{https://arxiv.org/abs/2210.07913}{arXiv:2210.07913}.
+
+\bibitem{knuth} D. E. Knuth, \emph{The Art of Computer Programming},
+vol. 3, \emph{Sorting and Searching}, 2nd ed., Addison-Wesley, 1998.
+
+\bibitem{deberg} M. de Berg, O. Cheong, M. van Kreveld, and M. Overmars,
+\emph{Computational Geometry: Algorithms and Applications}, 3rd ed.,
+Springer, 2008.
+
+\bibitem{gusfield} D. M. Gusfield, \emph{Sensitivity Analysis for
+Combinatorial Optimization}, Ph.D. dissertation, University of California,
+Berkeley, 1980.
+
+\bibitem{eisner} M. J. Eisner and D. G. Severance, ``Mathematical Techniques
+for Efficient Record Segmentation in Large Shared Databases,''
+\emph{Journal of the ACM}, vol. 23, no. 4, pp. 619--635, 1976.
+\href{https://doi.org/10.1145/321978.321982}{doi:10.1145/321978.321982}.
+
+\bibitem{megiddo} N. Megiddo, ``Applying Parallel Computation Algorithms
+in the Design of Serial Algorithms,'' \emph{Journal of the ACM},
+vol. 30, no. 4, pp. 852--865, 1983.
+
+\bibitem{lei2019} J. Lei, ``Fast Exact Conformalization of the Lasso Using
+Piecewise Linear Homotopy,'' \emph{Biometrika}, vol. 106, no. 4,
+pp. 749--764, 2019.
+
+\bibitem{li2024} D. Li, ``Generalized Fast Exact Conformalization,''
+\emph{Advances in Neural Information Processing Systems}, 2024.
+
+\bibitem{speedcp} Y. Liu, Y. J. Jung, Z. Wu, S. Jeong, and C. Donnat,
+``SpeedCP: Fast Kernel-based Conditional Conformal Prediction,''
+\emph{Proceedings of the 43rd International Conference on Machine Learning},
+2026.
+
+\bibitem{orlib} J. E. Beasley, ``OR-Library: Distributing Test Problems by
+Electronic Mail,'' \emph{Journal of the Operational Research Society},
+vol. 41, no. 11, pp. 1069--1072, 1990.
+\href{https://people.brunel.ac.uk/~mastjjb/jeb/orlib/mknapinfo.html}{Knapsack}
+and \href{https://people.brunel.ac.uk/~mastjjb/jeb/orlib/scpinfo.html}{set-covering} data.
+
+\bibitem{beasley87} J. E. Beasley, ``An Algorithm for Set Covering Problems,''
+\emph{European Journal of Operational Research}, vol. 31, pp. 85--93, 1987.
+
+\bibitem{sdd} A. Robicquet, A. Sadeghian, A. Alahi, and S. Savarese,
+``Learning Social Etiquette: Human Trajectory Understanding in Crowded
+Scenes,'' \emph{European Conference on Computer Vision}, 2016.
+
+\bibitem{nonexchangeable} A. Farinhas, C. Zerva, D. Ulmer, and
+A. F. T. Martins, ``Non-Exchangeable Conformal Risk Control,''
+\emph{International Conference on Learning Representations}, 2024.
+\href{https://arxiv.org/abs/2310.01262}{arXiv:2310.01262}.
+\end{thebibliography}
+
+\end{document}

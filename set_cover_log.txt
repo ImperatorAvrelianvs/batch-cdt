@@ -1,0 +1,19 @@
+[set_cover] full paths: 11588 intervals, 23128 LP solves, 281.2s
+[set_cover] decisions vs direct solves at random parameters: 0/48 mismatches; generator equals non-lazy path on scene 0
+[set_cover] losses: data point 8/48, elapsed 145s
+[set_cover] losses: data point 16/48, elapsed 364s
+[set_cover] losses: data point 24/48, elapsed 500s
+[set_cover] losses: data point 32/48, elapsed 664s
+[set_cover] losses: data point 40/48, elapsed 875s
+[set_cover] losses: data point 48/48, elapsed 1077s
+[set_cover] T=1 tau=4.2349 cutoff=0.4295 nonmonotone data points=5
+    (1) full path + all losses : 23128 LP, 11588 loss evals, 388.96s  (LP 281.24s, loss 107.72s)
+    (2) full path + sweep      : 23128 LP, 368 loss evals, 284.18s  (from recorded per-evaluation times)
+    (3) lazy path + sweep      : 961 LP, 368 loss evals, 8.41s measured over 3 run(s)  [predicted 961 LP, 368 evals]
+    threshold sweep (cutoff, sweep loss evals, lazy LP solves): [(0.669, 156, 538), (0.429, 368, 961), (0.234, 946, 2136), (0.177, 1498, 3229), (0.151, 1925, 4077), (0.131, 2340, 4895), (0.121, 2616, 5463), (0.104, 3135, 6538), (0.082, 3996, 8243), (0.07, 4620, 9489), (0.061, 5087, 10422), (0.052, 5767, 11768), (0.041, 6580, 13410), (0.035, 7176, 14588), (0.033, 7390, 15026), (0.027, 7936, 16106), (0.022, 8573, 17386)]
+[set_cover] T=10 tau=3.9801 cutoff=0.5454 nonmonotone data points=5
+    (1) full path + all losses : 23128 LP, 11588 loss evals, 1358.31s  (LP 281.24s, loss 1077.08s)
+    (2) full path + sweep      : 23128 LP, 257 loss evals, 301.69s  (from recorded per-evaluation times)
+    (3) lazy path + sweep      : 750 LP, 257 loss evals, 18.21s measured over 1 run(s)  [predicted 750 LP, 257 evals]
+    threshold sweep (cutoff, sweep loss evals, lazy LP solves): [(0.545, 257, 750), (0.32, 574, 1378), (0.211, 1135, 2512), (0.171, 1582, 3401), (0.148, 1988, 4196), (0.123, 2559, 5342), (0.109, 2999, 6260), (0.094, 3477, 7210), (0.078, 4183, 8631), (0.069, 4651, 9557), (0.064, 4964, 10170), (0.055, 5568, 11379), (0.041, 6581, 13405), (0.036, 7117, 14460), (0.029, 7710, 15648), (0.027, 8045, 16322), (0.02, 8746, 17709)]
+[set_cover] saved timing_set_cover.json

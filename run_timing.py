@@ -12,7 +12,7 @@ import lp_path as P
 import two_stage as T2
 
 ALPHA, LO, HI = 0.1, 0.0, 1.0
-T_DAYS = 10
+N_REALIZATIONS = 10
 
 
 def lazy_path(scene, stats, lo=LO, hi=HI, tol=1e-9):
@@ -41,27 +41,27 @@ def lazy_path(scene, stats, lo=LO, hi=HI, tol=1e-9):
 def make_family(name):
     if name == "knapsack":
         scenes = P.build("knapsack")
-        days = 1
+        realizations = 1
 
-        def day_cost(s, x, d):
+        def realization_cost(s, x, d):
             return P.realized_risk(s, x)
     else:
         scenes = T2.build()
         rng = np.random.default_rng(777)
-        for s in scenes:                     # T_DAYS realized requirement sets per data point
+        for s in scenes:                     # N_REALIZATIONS realized requirement sets per data point
             m = s["matrix"].shape[0]
             is_req = np.zeros(m, bool)
             is_req[s["required"]] = True
-            s["realized_days"] = []
-            for d in range(T_DAYS):
+            s["demand_realizations"] = []
+            for d in range(N_REALIZATIONS):
                 u = rng.uniform(size=m)
-                s["realized_days"].append(np.flatnonzero(np.where(is_req, u < 0.8, u < 0.5)))
-        days = T_DAYS
+                s["demand_realizations"].append(np.flatnonzero(np.where(is_req, u < 0.8, u < 0.5)))
+        realizations = N_REALIZATIONS
 
-        def day_cost(s, x, d):
-            s["realized"] = s["realized_days"][d]
+        def realization_cost(s, x, d):
+            s["realized"] = s["demand_realizations"][d]
             return T2.realized_cost(s, x)
-    return scenes, days, day_cost
+    return scenes, realizations, realization_cost
 
 
 def sweep(n, k, first, nxt, loss):
@@ -88,10 +88,10 @@ def sweep(n, k, first, nxt, loss):
 
 
 def main(name):
-    scenes, days, day_cost = make_family(name)
+    scenes, realizations, realization_cost = make_family(name)
     n = len(scenes)
     k = int(math.floor((n + 1) * ALPHA - 1))
-    out = {"family": name, "n": n, "k": k, "days_available": days}
+    out = {"family": name, "n": n, "k": k, "realizations_available": realizations}
 
     def log(*a):
         print(*a, flush=True)
@@ -134,20 +134,20 @@ def main(name):
     log(f"[{name}] decisions vs direct solves at random parameters: {mism}/{checks} mismatches; generator equals non-lazy path on scene 0")
 
     # ---- Loss on every interval, with individual evaluation times
-    cost = [np.zeros((len(p["rights"]), days)) for p in paths]
-    tcost = [np.zeros((len(p["rights"]), days)) for p in paths]
+    cost = [np.zeros((len(p["rights"]), realizations)) for p in paths]
+    tcost = [np.zeros((len(p["rights"]), realizations)) for p in paths]
     t_all = time.perf_counter()
     for i, (s, p) in enumerate(zip(scenes, paths)):
         for j, x in enumerate(p["decs"]):
-            for d in range(days):
+            for d in range(realizations):
                 t0 = time.perf_counter()
-                cost[i][j, d] = day_cost(s, x, d)
+                cost[i][j, d] = realization_cost(s, x, d)
                 tcost[i][j, d] = time.perf_counter() - t0
         if i % 8 == 7:
             log(f"[{name}] losses: data point {i + 1}/{n}, elapsed {time.perf_counter() - t_all:.0f}s")
 
     results = []
-    for T in sorted({1, days}):
+    for T in sorted({1, realizations}):
         mean_cost = [c[:, :T].mean(axis=1) for c in cost]
         eval_t = [t[:, :T].sum(axis=1) for t in tcost]
         allc = np.concatenate(mean_cost)
@@ -198,7 +198,7 @@ def main(name):
 
             def loss(i, x):
                 t0 = time.perf_counter()
-                c = np.mean([day_cost(scenes[i], x, d) for d in range(T)])
+                c = np.mean([realization_cost(scenes[i], x, d) for d in range(T)])
                 lt[0] += time.perf_counter() - t0
                 return c > tau
 

@@ -2,7 +2,7 @@
  "family": "set_cover",
  "n": 48,
  "k": 3,
- "days_available": 10,
+ "realizations_available": 10,
  "path_seconds_full": 281.23633770000015,
  "path_lp_full": 23128,
  "intervals": 11588,

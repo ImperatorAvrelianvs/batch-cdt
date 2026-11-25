@@ -2,7 +2,7 @@
  "family": "knapsack",
  "n": 48,
  "k": 3,
- "days_available": 1,
+ "realizations_available": 1,
  "path_seconds_full": 3.2880003999998735,
  "path_lp_full": 2498,
  "intervals": 1273,

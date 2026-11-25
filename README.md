@@ -10,6 +10,28 @@ losses, black-box query bounds, and a backward search along a planner's
 solution path. For parametric linear programs the path is generated only
 as needed, reducing optimization solves as well as loss evaluations.
 
+[Presentation slides](presentation/slides.pdf) · [Editable slide source](presentation/slides.tex)
+
+## What the joint sweep saves
+
+For **two-stage set covering with one demand realization per calibration example** at the published threshold (15th cost percentile), all methods recover the same last-unsafe boundary (0.42948). Relative to full enumeration, the on-demand joint sweep uses **95.8% fewer planner solves** (961 versus 23,128) and **96.8% fewer loss evaluations** (368 versus 11,588). Relative to the stronger baseline that already stops each example independently, it reduces **median serial runtime from 65.06 s to 13.54 s**, a **4.80× speedup** in three runs per method.
+
+Across the 34 set-covering task–threshold combinations, the joint sweep uses a median of **29.1% fewer planner solves and 30.3% fewer loss evaluations** than independent stopping.
+
+The original full-enumeration records give **estimated speedups of 44.5× and 74.6×** for one and ten demand realizations per example. These divide the sum of the measured exhaustive stages (388.96 s and 1,358.31 s) by the median end-to-end sweep time from the same experiment (8.749 s and 18.206 s). Generating all paths first and then sweeping their losses gives estimated ratios of 32.5× and 16.6×. The 4.80× and 4.41× comparisons use separate, fully timed runs of independent and joint stopping.
+
+![Set-covering operation counts with one demand realization per example for four methods and measured serial timings for the two stopping methods](experiments/figures/set_cover_T1.png)
+
+The same controlled timing comparison gives **1.96×** on knapsack (three runs per method) and **4.41×** on set covering with ten demand realizations per example (three runs per method). Across three tasks and 17 thresholds per task, the joint sweep returns the exhaustive cutoff in **51/51** settings. Both planner solves and loss evaluations fall by at least 25% against independent stopping in **40/51** settings.
+
+| Additional experiment | Observed result |
+| --- | --- |
+| Graded set-cover recourse loss | At the original binary operating thresholds, joint stopping saves 79.0% (one demand realization) and 83.6% (ten demand realizations) of evaluations against independent saturation stopping. Across all 17 thresholds the median is about 40% for each task, reaching 0% at the highest threshold. |
+| Black-box selection | Across 54 combinations of size, grid and threshold distribution, two-way anchored selection uses a median 21.9% fewer queries than three-way anchored selection. Certified bisection wins in the dense uniform example. |
+| Integer decision planners | On 100 synthetic 22-variable binary planners, exhaustive enumeration independently recovers all 1,311 winning pieces. The lazy graded sweep uses 18.6% fewer solver calls and 31.8% fewer loss evaluations than full-path calibration. |
+
+[All experiments, figures and reproduction commands](experiments/README.md) · [Results notebook](experiments/extension_experiments.ipynb) · [Raw timing observations](experiments/joint_stopping/timings.jsonl)
+
 ## Reproduce the public-data experiments
 
 ```bash
@@ -65,14 +87,13 @@ observations with risk level `alpha=0.1`, the supplied records contain:
 | Task | Complete path LP solves | On-demand LP solves | All loss evaluations | Backward sweep |
 | --- | ---: | ---: | ---: | ---: |
 | Knapsack | 2,498 | 999 | 1,273 | 420 |
-| Set covering, one realized day | 23,128 | 961 | 11,588 | 368 |
-| Set covering, ten realized days | 23,128 | 750 | 11,588 | 257 |
+| Set covering, one demand realization | 23,128 | 961 | 11,588 | 368 |
+| Set covering, ten demand realizations | 23,128 | 750 | 11,588 | 257 |
 
 The full-path times in [`timing_knapsack.json`](timing_knapsack.json)
 and [`timing_set_cover.json`](timing_set_cover.json) are sums of recorded
 LP and integer-program timings. The on-demand method was timed as a complete
-run, three times for knapsack and one-day covering, and once for ten-day
-covering. These comparisons should not be treated as independent
+run, three times for knapsack and set covering with one demand realization, and once for set covering with ten demand realizations. These comparisons should not be treated as independent
 end-to-end timings for every method. Both JSON files include a threshold
 sweep; the reported threshold for each task was chosen from 17
 quantiles so that its cutoff is nearest `0.5`.

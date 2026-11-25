@@ -13,6 +13,7 @@
 \usepackage[margin=1in,headheight=15pt,headsep=18pt,footskip=28pt]{geometry}
 \usepackage{amsmath,amssymb,amsthm,mathtools}
 \usepackage{booktabs,tabularx}
+\usepackage[ruled,lined,shortend]{algorithm2e}
 \usepackage{caption}
 \usepackage{xcolor}
 \usepackage{fancyhdr}
@@ -57,33 +58,29 @@ Batch Conformal Decision Theory with\par Fewer Counterfactual Evaluations\par}
 \vspace{2pt}
 {\small Department of Electrical Engineering, IIT Indore\par}
 \vspace{5pt}
-{\normalsize 17 November 2026\par}
+{\normalsize 25 November 2026\par}
 \end{center}
 \vspace{6pt}
 
 \begin{center}\textbf{Abstract}\end{center}
 \vspace{-4pt}
 \begin{list}{}{\leftmargin=2em\rightmargin=2em\topsep=0pt\parsep=0pt}
-\item Conformal decision theory (CDT) calibrates a planner directly for low risk rather than calibrating upstream prediction sets: given a calibration dataset of $n$ historical data points and a conformal control variable $\lambda$ that governs planner caution, batch CDT selects the least conservative parameter whose empirical loss stays below a prescribed budget. Finding this parameter requires evaluating counterfactual decisions by running the planner on past data points at candidate values of $\lambda$ and scoring each decision against the observed outcome. We aim to reduce the number of such counterfactual evaluations. When realized binary losses are nonincreasing in $\lambda$ across a grid of $J$ parameters, the calibrated cutoff is determined by an order statistic of the data points' last unsafe grid indices. We prove that any exact black-box algorithm requires $\Omega(n+\log J)$ loss queries in the worst case, and we give an anchored randomized Quickselect algorithm that uses $O(n+\log J\log n)$ queries in expectation. When the planner scores candidate decisions by functions affine in $\lambda$, its selected decision changes only at intersections along an upper envelope of score lines; sweeping backward from the most conservative interval recovers the exact cutoff even when prediction errors make the realized loss nonmonotone in $\lambda$. For parametric linear programs, reversing the Eisner--Severance recursion generates these optimality intervals from right to left on demand, avoiding unnecessary planner solves and loss evaluations while preserving the finite-sample conformal risk bound under exchangeability and a safe fallback.
+\item By evaluating alternative decisions on a calibration dataset, batch conformal decision theory selects a rule that controls expected loss on a new example. We first show that the cutoff is determined by an order statistic of the last unsafe grid indices when binary losses are nonincreasing on a grid of $J$ parameter values. We give a randomized selection algorithm for computing this cutoff and show that it uses $O(n+\log J\log n)$ queries in expectation on $n$ calibration examples. In addition, we prove a worst-case lower bound of $\Omega(n+\log J)$ queries for exact algorithms when $J\ge3$ and the budget permits $0\le k\le n-2$ unsafe examples. For planners with affine decision scores, a backward sweep examines the winning decisions in decreasing parameter order until the last-unsafe boundary for the batch is determined, even when binary losses are nonmonotone. Assuming exchangeable calibration and test examples, we show that choosing a parameter strictly above this boundary controls the probability of an unsafe decision, with a safe fallback when necessary. On two-stage set covering, the joint sweep reduced planner solves and loss evaluations by medians of $29.1\%$ and $30.3\%$ relative to independent stopping across $34$ settings, and separately timed stages imply a speedup of up to $75\times$ over full enumeration of the solution path at the selected thresholds.
 \end{list}
 \vspace{4pt}
 {\small\noindent Code and experiments: \href{https://github.com/ImperatorAvrelianvs/batch-cdt}{\texttt{github.com/ImperatorAvrelianvs/batch-cdt}}.\par}
 
 \section{Introduction}\label{sec:intro}
 
-Planners in autonomous systems routinely act on imperfect predictions: for example, consider a robot that must navigate in a crowd of pedestrians whose locations it must predict, while an operations planner must allocate resources appropriately. One popular way to attach distribution-free guarantees to learned predictors is split conformal prediction, which constructs a prediction set covering the true outcome with probability at least $1-\alpha$ and asks the planner to hedge against every outcome inside that set. In decision-making problems, however, simultaneous coverage over all predicted variables is often much stronger than safety requires. If a pedestrian walking far from the robot's path is poorly predicted, expanding the prediction sets around all pedestrians can freeze the robot in place even though a false prediction has a negligible contribution to collision risk.
+One difficulty in applying batch conformal decision theory (CDT) is the cost of calibration, since evaluating a rule at a single parameter value can require a fresh planner solve for each example \cite{cdt}. To calibrate the rule, Lekeufack et al.\ explain, one must consider \textquotedblleft{}a sequence of counterfactual decisions\textquotedblright{} and evaluate them against the observed outcomes \cite{cdt}. A navigation planner, for example, relies on pedestrian predictions to select a route whose collision loss can be evaluated once the trajectories are observed.
 
-Conformal decision theory (CDT) \cite{cdt} bypasses prediction sets and calibrates the decision rule itself. The planner is indexed by a conformal control variable $\lambda$ that controls the agent's risk aversion (following the convention in \cite{cdt}, larger $\lambda$ means greater conservatism). Whereas online CDT adjusts $\lambda$ after each step, batch CDT uses a calibration dataset of $n$ historical data points $(X_1,Y_1),\ldots,(X_n,Y_n)$, where $X_i$ records the inputs available to the planner (including any learned predictions) and $Y_i$ records the realized outcome, together with a bounded loss function $\mathcal L(d,Y_i)\in[0,1]$. \Needspace{6\baselineskip}Calibrating $\lambda$ on this dataset requires answering a counterfactual question across calibration data points $i\in\{1,\ldots,n\}$ and candidate parameters $\lambda$:
-\begin{quote}
-\emph{What counterfactual decision $D_i(\lambda)$ would the planner have chosen from input $X_i$ had the conformal control variable been set to $\lambda$, and what realized loss $L_i(\lambda)=\mathcal L(D_i(\lambda),Y_i)$ would that decision have incurred on the observed outcome $Y_i$?}
-\end{quote}
-Selecting the smallest parameter $\widehat\lambda$ whose cumulative loss across the calibration dataset does not exceed $B_n=(n+1)\alpha-1$, guarantees that a future data point $(X_{n+1},Y_{n+1})$ incurs expected loss at most $\alpha$ \cite{cdt,crc} assuming exchangeability. Yet as Lekeufack et al.\ \cite{cdt} point out, computing $\widehat\lambda$ in batch requires iterating through counterfactual decisions across candidate parameters and calibration data points, which becomes a computational bottleneck whenever each planner call $D_i(\lambda)$ solves a trajectory optimization problem or a mathematical program.
+Consider $n+1$ exchangeable examples, with a decision $D_i(\lambda)$ for each value of the control parameter and an associated loss function $L_i(\lambda)=\mathcal L(D_i(\lambda),Y_i)$ that scores the decision against the observed outcome $Y_i$. We use the first $n$ examples for calibration of a parameter that governs the decision on example $n+1$. Evaluating $L_i(\lambda)$ can itself require two optimization problems, one to choose the plan and another to score it against the realized outcome.
 
-In the black-box model (Section~\ref{sec:blackbox}), the planner is queried on a finite grid $\Lambda=\{\lambda_1<\cdots<\lambda_J\}$, and each query $(i,j)$ returns $L_i(\lambda_j)$ at the cost of one planner call. Under nonincreasing realized loss curves, naive binary search over $\Lambda$ evaluates all $n$ data points at $\lceil\log_2 J\rceil$ midpoints, costing $\Theta(n\log J)$ queries. A simple improvement is \emph{certified bisection} (Section~\ref{sec:certified}), which bounds unqueried losses by monotonicity and halts at a midpoint as soon as partial sums certify feasibility or infeasibility (Proposition~\ref{prop:partial}). For binary losses $L_i(\lambda_j)\in\{0,1\}$, each data point is summarized by its last unsafe grid index $\rho_i$, reducing the batch CDT cutoff $\widehat\lambda$ to the $(k+1)$st largest value among $\rho_1,\ldots,\rho_n$, where $k=\lfloor B_n\rfloor$ (Lemma~\ref{lem:order}). Using this reduction, we prove that any exact algorithm requires $\Omega(n+\log J)$ queries in the worst case (Theorem~\ref{thm:lower}), and we give an anchored randomized Quickselect procedure (Algorithm~1) that queries all $n$ data points once at $\lambda_1$ and selects the cutoff in $O(n+\log J\log n)$ expected queries (Theorem~\ref{thm:upper}).
+On a grid of $J$ parameter values, the goal is to find the calibrated cutoff, that is, the first grid point at which at most $k=\lfloor(n+1)\alpha-1\rfloor\ge0$ examples are unsafe, with a safe fallback if no such point exists. If each binary loss is nonincreasing and $\rho_i$ is the last unsafe grid index of example $i$ (zero for an always-safe example), the cutoff lies one grid point above the $(k+1)$st largest $\rho_i$, with index $J+1$ denoting the fallback (Lemma~\ref{lem:order}). To determine this order statistic, an algorithm need only query whether $\rho_i$ reaches a given index $j$, since the answer is precisely the observed bit $L_i(\lambda_j)$. We introduce an anchored version of randomized Quickselect and show that it uses $O(n+\log J\log n)$ queries in expectation by first testing every example at the least conservative grid point (Theorem~\ref{thm:upper}). Our analysis shows that exact algorithms require $\Omega(n+\log J)$ queries in the worst case for $J\ge3$ and $0\le k\le n-2$, and that the two bounds agree up to constants whenever $J$ grows polynomially with $n$ (Theorems~\ref{thm:lower} and~\ref{thm:upper}).
 
-Treating the planner as an opaque black box still leaves two practical questions open. First, why should realized losses be monotone in $\lambda$? Even when increasing $\lambda$ forces the planner to choose routes with larger \emph{predicted} safety margins, prediction errors mean that a route which looks safer to the planner can still collide in $Y_i$, causing $L_i(\lambda)$ to jump from $0$ to $1$ and back to $0$ as $\lambda$ grows. Second, many planners select a decision by maximizing an explicit score over candidate decisions. Section~\ref{sec:affine} studies planners that score a finite candidate set $\mathcal D_i$ by an affine function $a_i(d)+\lambda b_i(d)$. Because the winning decision $D_i(\lambda)$ changes only at intersections along the upper envelope of these score lines, a backward event sweep (Algorithm~2) over optimality intervals from right to left recovers the exact $(k+1)$st largest last unsafe parameter $V_i=\sup\{\lambda\ge0:L_i(\lambda)=1\}$ and preserves the conformal risk bound under the monotone majorant $M_i(\lambda)=\mathbf1\{V_i\ge\lambda\}$ of \cite{crc} without requiring $L_i(\lambda)$ itself to be monotone (Lemma~\ref{lem:sweep} and Corollary~\ref{cor:risk}).
+In a second class of planners, the intercept $a_i(d)$ and slope $b_i(d)$ of each candidate decision $d$ are combined into a single score $a_i(d)+\lambda b_i(d)$, which the planner maximizes. The sweep makes use of the upper envelope of these lines as $\lambda$ varies, because the winning decision and its loss stay fixed on each open piece. Visit the winning intervals and isolated tie decisions in decreasing order of their right endpoints until $k+1$ distinct examples have produced an unsafe decision or all events have been exhausted. The sweep returns the $(k+1)$st largest of the last-unsafe boundaries $V_i=\sup\{\lambda:L_i(\lambda)=1\}$, using $-\infty$ for an example that is always safe (Lemma~\ref{lem:sweep}). Under exchangeability, this gives a marginal probability of an unsafe decision of at most $(k+1)/(n+1)\le\alpha$ for any algorithm that chooses a parameter strictly above the returned boundary or uses the safe fallback (Corollary~\ref{cor:risk}).
 
-When candidate decisions are defined implicitly as the vertices of a polytope in a parametric linear program (LP), enumerating the full path upfront via the Eisner--Severance method \cite{eisner} takes $2h_i-1$ LP solves for a path of $h_i$ pieces. In Section~\ref{sec:lazy}, we reverse the Eisner--Severance recursion to explore right subintervals before left subintervals, generating optimality intervals from right to left only when Algorithm~2 requests them (Proposition~\ref{prop:lazy}). Throughout the paper, we count \textbf{planner solves} (computing $D_i(\lambda)$ from $X_i$) separately from \textbf{loss evaluations} (testing $D_i(\lambda)$ against $Y_i$, for instance by solving an integer recourse program). Section~\ref{sec:expt} evaluates both costs on public OR-Library benchmarks \cite{orlib,beasley87}, synthetic pedestrian scenes, and the Stanford Drone Dataset scenes of \cite{cdt,sdd}, before Section~\ref{sec:discussion} discusses limitations and related work. All proofs are given in equation form in Appendix~\ref{sec:proofs}.
+Whenever the Eisner--Severance recursion \cite{eisner} splits a parameter interval, our LP path algorithm explores the two subintervals recursively, visiting the right one first so that the sweep can generate winning decisions on demand (Proposition~\ref{prop:lazy}). At the selected threshold for two-stage set covering with one demand realization, the joint sweep uses $95.8\%$ fewer planner solves and $96.8\%$ fewer loss evaluations than full enumeration and runs $4.80$ times as fast as independent stopping (Tables~\ref{tab:lazy} and~\ref{tab:stopping}).
 
 \section{Problem Setup and Batch Calibration}\label{sec:problem}
 
@@ -122,6 +119,8 @@ where $\lambda_{J+1}$ denotes the safe fallback.
 
 By Lemma~\ref{lem:order}, exact batch calibration reduces to finding the $(k+1)$st largest integer among $\rho_1,\ldots,\rho_n\in\{0,\ldots,J\}$ using threshold queries $L_i(\lambda_j)=\mathbf1\{\rho_i\ge j\}$.
 
+In split-conformal notation, the $(k+1)$st largest $\rho_i$ is the $\lceil(n+1)(1-\alpha)\rceil$th smallest calibration score \cite{crc}. By construction, a score equal to $j$ is still unsafe at $\lambda_j$, so the grid rule advances one index in~\eqref{eq:stat}.
+
 \subsection{Certified bisection for general monotone losses}\label{sec:certified}
 
 For general losses $L_i(\lambda_j)\in[0,1]$, an order statistic of per-point thresholds need not determine $\widehat\lambda$, yet monotonicity~\eqref{eq:mono} still bounds unqueried losses. Let $Q_i\subseteq\Lambda$ be the set of parameters queried so far for calibration data point $i$. At any parameter $\lambda\in\Lambda$, monotonicity implies $\underline L_i(\lambda)\le L_i(\lambda)\le\overline L_i(\lambda)$, where
@@ -139,7 +138,7 @@ At each midpoint $\lambda_m$ of binary search over $\Lambda$, \emph{certified bi
 Suppose that the losses $L_i(\lambda_j)\in[0,1]$ satisfy the monotonicity condition~\eqref{eq:mono}. Then certified bisection returns the exact batch cutoff $\widehat\lambda$ in~\eqref{eq:cdt} and makes at most $n$ fresh loss queries at each bisection midpoint.
 \end{proposition}
 
-Certified bisection saves little work when binary search visits several feasible midpoints in decreasing order, each below all previously queried parameters: certifying that such a midpoint has at most $k$ binary collisions requires observing at least $n-k$ zeros at that midpoint, since any $k+1$ unqueried data points could otherwise equal $1$. This occurs in the robot diagnostic of Section~\ref{sec:expt}.
+Certified bisection saves little work when binary search visits several feasible midpoints in decreasing order, each below all previously queried parameters: certifying that such a midpoint has at most $k$ binary collisions requires observing at least $n-k$ zeros at that midpoint, since any $k+1$ unqueried data points could otherwise equal $1$.
 
 \subsection{Worst-case lower bound on black-box queries}\label{sec:lower}
 
@@ -152,6 +151,8 @@ loss queries on some instance. For every randomized black-box algorithm that is 
 \end{theorem}
 
 While full bisection can make $\Theta(n\log J)$ queries, Theorem~\ref{thm:lower} shows that $\Omega(n+\log J)$ queries are necessary: any exact algorithm must inspect at least $n-1$ data points and spend $\Omega(\log J)$ threshold queries locating $\rho_{(k+1)}$.
+
+The lower bound applies to algorithms that return the first feasible grid point (or certify that the fallback is needed). If the realized losses are nonincreasing on every example, then any measurable choice at or above the calibrated cutoff inherits its risk bound under exchangeability, including the safe fallback. For example, a procedure can return the fallback without a query, at the cost of giving up any decision available at a smaller feasible parameter.
 
 \subsection{Anchored randomized selection}\label{sec:selection}
 
@@ -167,6 +168,30 @@ To match the $\Omega(n+\log J)$ scale when $n$ is large relative to $\log J$, no
 \item \textbf{Rank update:} If $r\le |U_{>}|$, set $U\leftarrow U_{>}$ and return to Step~2; if $|U_{>}|<r\le |U_{>}|+|U_{=}|$, return $\widehat\lambda=\lambda_{t+1}$; otherwise set $r\leftarrow r-|U_{>}|-|U_{=}|$ and $U\leftarrow U_{<}$, and return to Step~2.
 \end{enumerate}
 \end{samepage}
+
+\begingroup
+\SetAlFnt{\small}
+\begin{algorithm}[H]
+\caption{Anchored randomized Quickselect}\label{alg:anchor-code}
+\KwData{Grid $\lambda_1<\cdots<\lambda_J$, safe fallback $\lambda_{J+1}$, nonincreasing binary loss oracles $L_i$, and budget $k$. Reuse cached query answers.}
+\KwResult{Calibrated cutoff $\widehat\lambda$.}
+$U\gets\{i\in\{1,\ldots,n\}:L_i(\lambda_1)=1\}$\;
+\lIf{$|U|\le k$}{\Return $\lambda_1$}
+$r\gets k+1$\;
+\While{\textnormal{true}}{
+  Draw $p$ uniformly from $U$ and find $t=\rho_p$ by bisection on $\{1,\ldots,J\}$\;
+  $U_{>}\gets\emptyset$, \quad $U_{=}\gets\{p\}$, \quad $U_{<}\gets\emptyset$\;
+  \ForEach{$i\in U\setminus\{p\}$}{
+    \lIf{$t<J$ \textnormal{and} $L_i(\lambda_{t+1})=1$}{insert $i$ into $U_{>}$}
+    \lElseIf{$L_i(\lambda_t)=1$}{insert $i$ into $U_{=}$}
+    \lElse{insert $i$ into $U_{<}$}
+  }
+  \lIf{$r\le |U_{>}|$}{$U\gets U_{>}$}
+  \lElseIf{$r\le |U_{>}|+|U_{=}|$}{\Return $\lambda_{t+1}$}
+  \lElse{$r\gets r-|U_{>}|-|U_{=}|$,\quad $U\gets U_{<}$}
+}
+\end{algorithm}
+\endgroup
 
 \begin{theorem}[Expected query complexity of Algorithm~1]\label{thm:upper}
 Suppose that all losses are binary and satisfy~\eqref{eq:mono}. Algorithm~1 returns the exact batch cutoff $\widehat\lambda$. If $u\le1$, it makes at most $n+\lceil\log_2 J\rceil$ queries; if $u\ge2$, its expected number of loss queries is at most
@@ -236,7 +261,7 @@ taking $V_i=-\infty$ when $L_i(\lambda)=0$ for all $\lambda\ge0$, and $V_i=+\inf
 \begin{equation}\label{eq:maj}
  M_i(\lambda)=\mathbf1\{V_i\ge\lambda\}\ge L_i(\lambda)\qquad\text{for all }\lambda\ge0
 \end{equation}
-is the tightest nonincreasing binary majorant of $L_i(\lambda)$, as used in conformal risk control \cite{crc}. Any parameter $\widetilde\lambda>V_{(k+1)}$ guarantees $\sum_{i=1}^n L_i(\widetilde\lambda)\le\sum_{i=1}^n M_i(\widetilde\lambda)\le k$.
+is a nonincreasing binary majorant of $L_i(\lambda)$ for conformal risk control \cite{crc}. At a finite last-unsafe boundary it takes value one even when the supremum is unattained. Any parameter $\widetilde\lambda>V_{(k+1)}$ guarantees $\sum_{i=1}^n L_i(\widetilde\lambda)\le\sum_{i=1}^n M_i(\widetilde\lambda)\le k$.
 
 Because $D_i(\lambda)$ and $L_i(\lambda)$ are constant on each open winning interval of the upper envelope, we need not evaluate every winning candidate to find $V_{(k+1)}$. Starting from $+\infty$, Algorithm~2 sweeps backward across all $n$ data points using a max-heap keyed by interval right endpoints: the first unsafe interval encountered for data point $i$ determines $V_i$ and skips all earlier intervals of data point $i$, and the sweep halts once $k+1$ data points have produced a collision. Any candidate selected by the tie rule only at an exact breakpoint is included as a point event at that breakpoint.
 
@@ -250,6 +275,31 @@ Because $D_i(\lambda)$ and $L_i(\lambda)$ are constant on each open winning inte
 \item \textbf{All-safe termination:} If the heap empties before $k+1$ unsafe data points appear, return $V_{(k+1)}=-\infty$.
 \end{enumerate}
 \end{samepage}
+
+\begingroup
+\SetAlFnt{\small}
+\begin{algorithm}[H]
+\caption{Backward event sweep}\label{alg:sweep-code}
+\KwData{For each example $i$, a right-to-left stream of winning intervals and singleton tie events, with binary loss $\ell_i(E)$ and right endpoint $r(E)=\sup E$ for each event $E$; budget $k$.}
+\KwResult{Batch last-unsafe boundary $V_{(k+1)}$.}
+$H\gets$ empty max-heap keyed by $r(E)$,\quad $c\gets 0$\;
+\ForEach{$i\in\{1,\ldots,n\}$}{
+  Take the first event $E$ from stream $i$ and push $(r(E),i,E)$ into $H$\;
+}
+\While{$H\ne\emptyset$}{
+  $(r,i,E)\gets\operatorname{popMax}(H)$\;
+  \eIf{$\ell_i(E)=1$}{
+    $V_i\gets r$,\quad $c\gets c+1$\;
+    \lIf{$c=k+1$}{\Return $r$}
+  }{
+    \If{stream $i$ has another event $E'$}{
+      Take $E'$ and push $(r(E'),i,E')$ into $H$\;
+    }
+  }
+}
+\Return $-\infty$\;
+\end{algorithm}
+\endgroup
 
 \begin{lemma}[Exactness of the backward event sweep]\label{lem:sweep}
 Suppose that every open winning interval and every isolated tie event on $[0,\infty)$ is listed for each data point $i\in\{1,\ldots,n\}$. Then Algorithm~2 returns the exact order statistic $V_{(k+1)}$ of $V_1,\ldots,V_n$, even when $L_i(\lambda)$ is nonmonotone. If the returned value is $+\infty$, no finite parameter makes the majorants $M_1,\ldots,M_n$ feasible.
@@ -284,10 +334,10 @@ Write $f_x(\lambda)=a_i^\top x+\lambda r_i^\top x$. In the method of Eisner and 
 \end{equation}
 If~\eqref{eq:intersection} holds, $t$ is their breakpoint; otherwise the new optimal vertex $x_i(t)$ splits $[\ell,u]$ into $[\ell,t]$ and $[t,u]$. Enumerating all $h_i\ge2$ pieces requires $2h_i-1$ LP solves.
 
-To supply Algorithm~2 on demand, we first solve~\eqref{eq:parametric} only at $\lambda_{\max}$ and hand the rightmost interval to the sweep. Only if that decision is evaluated and found safe do we solve at $\lambda=0$ and run the intersection test~\eqref{eq:intersection}, always exploring the \emph{right} subinterval $[t,u]$ before $[\ell,t]$ and pausing as soon as the next rightmost interval is certified. If data point $i$ is unsafe at $\lambda_{\max}$, no second LP solve is needed for that data point.
+To supply Algorithm~2 on demand, we first solve~\eqref{eq:parametric} only at $\lambda_{\max}$ and give the sweep the rightmost winning decision and its right endpoint. Only if that decision is evaluated and found safe do we solve at $\lambda=0$ and run the intersection test~\eqref{eq:intersection}, always exploring the \emph{right} subinterval $[t,u]$ before $[\ell,t]$ and pausing as soon as the next rightmost interval is certified. If data point $i$ is unsafe at $\lambda_{\max}$, no second LP solve is needed for that data point.
 
 \begin{proposition}[On-demand parametric LP path generation]\label{prop:lazy}
-Assume unique optimal vertices on the open pieces of $\phi_i$, a tie rule selecting an adjacent interval optimum at each breakpoint, and exact comparisons in~\eqref{eq:intersection}. Then the reversed recursion emits the exact winning intervals of data point $i$ in decreasing order of their right endpoints. If only the rightmost interval is requested, $1$ LP solve is performed; if $m_i\ge2$ intervals are emitted, the number of LP solves for data point $i$ is at most
+Assume unique optimal vertices on the open pieces of $\phi_i$, a tie rule selecting an adjacent interval optimum at each breakpoint and the inward interval optimum at either domain endpoint, and exact comparisons in~\eqref{eq:intersection}. Then the reversed recursion emits the winning decision and right endpoint of each open piece in decreasing order of right endpoint. The first emission costs one LP solve. Immediately after the $m_i$th emission, for $m_i\ge2$, the number of LP solves for data point $i$ is at most
 \begin{equation}\label{eq:lazy-bound}
  2m_i+s_i,\qquad 0\le s_i\le h_i-m_i,
 \end{equation}
@@ -305,9 +355,15 @@ Suppose that the complete binary loss curves $\{L_i(\lambda):\lambda\ge0\}$ of t
 \end{equation}
 \end{corollary}
 
+\begin{corollary}[Risk control for graded losses]\label{cor:graded}
+Let $m=n+1$ and suppose that the loss curves $L_1,\ldots,L_m$ are exchangeable, take values in $[0,1]$, and are finite step functions with measurable breakpoints and event values on a closed interval augmented by a greatest element, the zero-loss fallback. For every $i$, define the suffix majorant $M_i(\lambda)=\sup_{u\ge\lambda}L_i(u)$ and write $M_i(\lambda_{\rm fb})=0$ for its value at the fallback, as in conformal risk control \cite[Corollary~1]{crc}. If $B_n=m\alpha-1\ge0$ and a measurable calibration rule returns $\widetilde\lambda$ with $\sum_{i=1}^n M_i(\widetilde\lambda)\le B_n$, then $\mathbb E[L_m(\widetilde\lambda)]\le\alpha$.
+\end{corollary}
+
+The graded sweep starts at the zero-loss fallback and updates the maximum on each path until that maximum reaches one or the path is exhausted. At each common endpoint, first update all point losses to test feasibility at the endpoint, then incorporate the losses on the open intervals immediately to its left to test feasibility there. If the sum first exceeds $B_n$, return a parameter from the preceding feasible point or interval (the fallback if necessary), and if the sum never exceeds $B_n$, return the left endpoint.
+
 \section{Experiments}\label{sec:expt}
 
-We evaluate our methods on two families of public combinatorial optimization problems from Beasley's OR-Library \cite{orlib,beasley87}---first for black-box grid calibration with monotone losses, and then for continuous calibration on $[0,1]$ where evaluating each realized loss requires solving integer recourse programs and the resulting loss curves can be nonmonotone---followed by synthetic pedestrian scenes and a diagnostic on the Stanford Drone Dataset scenes of \cite{cdt,sdd}. Code and reproduction scripts are at \href{https://github.com/ImperatorAvrelianvs/batch-cdt}{\texttt{github.com/ImperatorAvrelianvs/batch-cdt}}.
+We use the OR-Library knapsack and set-covering instances \cite{orlib,beasley87} to evaluate grid calibration and continuous calibration with integer recourse. Section~\ref{sec:diagnostics} reports the results for synthetic pedestrian scenes, and Appendix~\ref{sec:sdd} gives the corresponding diagnostic on recorded trajectories. Code and reproduction scripts are at \href{https://github.com/ImperatorAvrelianvs/batch-cdt}{\texttt{github.com/ImperatorAvrelianvs/batch-cdt}}.
 
 \subsection{Black-box grid calibration on public OR-Library data}\label{sec:public}
 
@@ -346,6 +402,20 @@ Anchored randomized selection & $197.1\pm58.0$ & $0.167\pm0.051$ & $214.7\pm52.5
 
 Certified bisection uses $53\%$ fewer LP solves than ordinary bisection on knapsack and $66\%$ fewer on set covering, reducing wall-clock time proportionally. Why is randomized selection slower here despite its asymptotic guarantee in Theorem~\ref{thm:upper}? At $\tau_i=2.5$ in set covering, nearly all $48$ data points are unsafe at $\lambda_1=0$, so the anchor pass discards almost nothing ($u\approx n$), while certified bisection rejects infeasible midpoints after just $k+1=4$ unsafe queries. Raising the set-covering threshold from $2.5$ to $7.0$ reverses the comparison: most data points become safe at $\lambda_1=0$, causing certified bisection's solve count to climb from $115$ to $274$ while anchored bisection uses $166$ solves and anchored selection averages $89$ queries (using cached $48\times 129$ LP solutions).
 
+We compare certified bisection with the three-way partition in Algorithm~1 and an anchored two-way variant using synthetic last-unsafe indices (Table~\ref{tab:scaling}). With sparse positive indices, Algorithm~1 uses $2.74$ queries per example against $4.89$ for certified bisection, whereas with dense uniform indices certified bisection uses $1.85$ against $5.10$ for Algorithm~1. Appendix~\ref{sec:extended} specifies the two-way partition and reports the comparison across all $54$ settings.
+
+\begin{center}
+\begin{minipage}{\linewidth}\centering\small
+\captionof{table}{Mean threshold queries per example over $40$ draws at $n=2{,}000$ and $J=8{,}193$. The worst-case lower bound in Theorem~\ref{thm:lower} is $2{,}012$ queries at this grid size ($1.006$ per example).}\label{tab:scaling}\smallskip
+\begin{tabular}{@{}lrrr@{}}\toprule
+Last-unsafe indices & Certified bisection & Algorithm 1 & Anchored two-way\\\midrule
+Sparse, concentrated near zero & 4.89 & 2.74 & 2.13\\
+Dense, concentrated near zero & 4.28 & 4.76 & 3.52\\
+Dense, uniform positive indices & 1.85 & 5.10 & 3.50\\\bottomrule
+\end{tabular}
+\end{minipage}
+\end{center}
+
 \subsection{Continuous calibration with costly integer-recourse losses}\label{sec:lazy-exp}
 
 Our second experiment retains the OR-Library instances and the parametric LP planner in~\eqref{eq:lpbench} over the continuous range $\lambda\in[0,1]$ (adding a relative perturbation of at most $10^{-3}$ to $a_i$ to prevent degenerate ties), but evaluates each fractional plan $x_i(\lambda)$ through an integer optimization problem whose realized loss need not be monotone in $\lambda$:
@@ -355,7 +425,7 @@ Our second experiment retains the OR-Library instances and the parametric LP pla
 \begin{equation}\label{eq:knap-loss}
  L_i(\lambda)=\mathbf1\bigl\{(r_i^{\mathrm{true}})^\top z_i(\lambda)>\tau_i\bigr\}.
 \end{equation}
-\item \textbf{Two-stage set covering with integer recourse:} Each of the $80$ predicted requirements in $X_i$ materializes with probability $0.8$, while each remaining row materializes with probability $0.5$. An integer set-covering MILP repairs any realized requirement left uncovered by $x_i(\lambda)$ at minimum column cost $R_{it}(x_i(\lambda))$ on realization $t\in\{1,\ldots,T\}$, and the binary loss checks whether the planned cost plus mean repair cost exceeds $\tau_i$:
+\item \textbf{Two-stage set covering with integer recourse:} For each calibration example, we draw $T\in\{1,10\}$ independent demand realizations and evaluate the same first-stage plan on each. In each realization, each of the $80$ predicted requirements in $X_i$ materializes with probability $0.8$, while each remaining row materializes with probability $0.5$. An integer set-covering MILP repairs any realized requirement left uncovered by $x_i(\lambda)$ at minimum column cost $R_{it}(x_i(\lambda))$ on realization $t\in\{1,\ldots,T\}$, and the binary loss checks whether the planned cost plus mean repair cost exceeds $\tau_i$:
 \begin{equation}\label{eq:cover-loss}
  L_i(\lambda)=\mathbf1\left\{
  \frac{c_i^\top x_i(\lambda)+T^{-1}\sum_{t=1}^T R_{it}(x_i(\lambda))}{150}
@@ -392,24 +462,51 @@ Set cover, $T=10$ ($V_{(4)}=0.5454$) & Full path, all losses & 23,128 & 11,588 &
 \end{minipage}
 \vspace{4pt}
 
-Four knapsack data points and five set-covering data points exhibit nonmonotone loss curves, and independent LP solves at $48$ randomly sampled parameters match the enumerated paths without error. In set covering with $T=1$, the backward sweep cuts MILP loss evaluations from $11{,}588$ to $368$, while generating the path on demand cuts LP solves from $23{,}128$ to $961$ ($750$ for $T=10$), finishing in $8.4$~s ($18.2$~s for $T=10$). Because the full-path times in Table~\ref{tab:lazy} sum separately recorded stages, their ratios to the end-to-end on-demand times are not controlled speedup ratios. As $\tau_i$ shifts $V_{(4)}$ toward $\lambda=0$, the sweep inspects more of the path: across the $17$ quantile thresholds, on-demand LP solves range from $370$ to $1{,}636$ (of $2{,}498$) on knapsack for $V_{(4)}\in[0.30,0.91]$, and from $538$ to $17{,}386$ (of $23{,}128$) on set covering ($T=1$) for $V_{(4)}\in[0.02,0.67]$.
+Four knapsack data points and five set-covering data points exhibit nonmonotone loss curves, and independent LP solves at $48$ randomly sampled parameters match the enumerated paths without error. In set covering with $T=1$, the backward sweep cuts MILP loss evaluations from $11{,}588$ to $368$, while generating the path on demand cuts LP solves from $23{,}128$ to $961$ ($750$ for $T=10$), finishing in $8.4$~s ($18.2$~s for $T=10$). The full-path times in Table~\ref{tab:lazy} add separately measured stages, whereas the on-demand times cover a single end-to-end run. As $\tau_i$ shifts $V_{(4)}$ toward $\lambda=0$, the sweep inspects more of the path: across the $17$ quantile thresholds, on-demand LP solves range from $370$ to $1{,}636$ (of $2{,}498$) on knapsack for $V_{(4)}\in[0.30,0.91]$, and from $538$ to $17{,}386$ (of $23{,}128$) on set covering ($T=1$) for $V_{(4)}\in[0.02,0.67]$.
 
-\subsection{Synthetic pedestrian scenes and Stanford Drone Dataset diagnostics}\label{sec:diagnostics}
+\subsection{Independent stopping and joint stopping}\label{sec:stopping}
+
+We compare the joint sweep to an independent stopping rule that uses the same on-demand LP generator. For each example, independent stopping locates the last unsafe decision or exhausts the path before taking the batch order statistic. The joint sweep advances the path with the rightmost remaining event until $k+1$ distinct examples have produced an unsafe decision. Across the $51$ task--threshold combinations, both methods recover the exhaustive boundary and the joint sweep uses fewer planner solves and loss evaluations (Appendix~\ref{sec:extended}).
+
+\begin{center}
+\begin{minipage}{\linewidth}
+\centering\small
+\captionof{table}{Serial calibration times and operation counts at the selected thresholds. For each task, we report operation counts and median times over three runs per method, with independent stopping first and the joint sweep second. Ratios use unrounded median times, and $T$ denotes demand realizations per calibration example.}
+\label{tab:stopping}
+\smallskip
+\begin{tabular}{@{}lrrrrr@{}}\toprule
+Task & Planner solves & Loss evaluations & Seconds & Ratio & Runs/method\\\midrule
+Knapsack & $1{,}665 \to 999$ & $803 \to 420$ & $8.00 \to 4.09$ & $1.96\times$ & 3\\
+Set covering, $T=1$ & $3{,}702 \to 961$ & $1{,}780 \to 368$ & $65.06 \to 13.54$ & $4.80\times$ & 3\\
+Set covering, $T=10$ & $2{,}526 \to 750$ & $1{,}197 \to 257$ & $176.92 \to 40.12$ & $4.41\times$ & 3\\\bottomrule
+\end{tabular}
+\end{minipage}
+\end{center}
+
+For $T=1$ and $T=10$, we estimate the full-enumeration time by adding the measured times for path generation and scoring, giving $388.96$ and $1{,}358.31$~s, respectively (Table~\ref{tab:lazy}). Given these stage sums and the measured on-demand medians from the same experiment ($8.749$~s over three runs and $18.206$~s in one run), we obtain estimated full-enumeration speedups of $44.5\times$ and $74.6\times$ by division. If all paths are generated first and then swept backward, the analogous estimates are $32.5\times$ and $16.6\times$, with the same loss counts as the on-demand sweep. Table~\ref{tab:lazy} reports the mean on-demand time for $T=1$ ($8.4$~s), while the estimated ratios use the median.
+
+We use the same single CPU core and fresh path generators when comparing the stopping rules. For each task, we warm the solver after data generation, seed the initial method order, and alternate that order across three paired repetitions. We measure the computational cost of each method in terms of elapsed time for LP solves, recourse evaluations, and stopping operations.
+
+\subsection{Synthetic pedestrian scenes}\label{sec:diagnostics}
 
 We also simulate exchangeable pedestrian scenes, each containing $1+\mathrm{Poisson}(2)$ pedestrians with true lateral positions drawn from $\mathcal N(0,4)$ and predicted positions corrupted by independent $\mathcal N(0,\sigma^2)$ noise. The planner selects among $400$ offsets $x_d\in[-5,5]$ to maximize $a_i(d)+\lambda b_i(d)$, where $a_i(d)\approx 10-0.3x_d^2$ (with small tie-breaking perturbations) and $b_i(d)$ is the smallest predicted separation; a collision occurs when true separation is below $0.8$. Over $180$ independent calibration draws per setting, Algorithm~2 matches exhaustive evaluation while avoiding $40.3\%$--$93.7\%$ of loss evaluations after the upper envelopes are built (Table~\ref{tab:sweep} in Appendix~\ref{sec:details}). Across $3{,}000$ paired draws with $n=48$ and $\sigma=1$, continuous calibration via Corollary~\ref{cor:risk} yields a held-out collision rate of $7.27\%$ and mean progress $4.000$, while a range-doubling grid calibrated on the majorant~\eqref{eq:maj} gives $7.23\%$ and $3.988$; searching raw nonmonotone losses on a grid lacks this risk guarantee.
 
-On $48$ overlapping scenes from the Stanford Drone Dataset \cite{cdt,sdd}, the candidate spline envelopes contain $517$ optimal intervals on $[0,\infty)$ ($494$ on $[0,1]$), and Algorithm~2 evaluates $259$ collision losses to recover $V_{(4)}=0.0271424$. With the feasible candidate splines and obstacle distances computed once and shared across procedures, both exhaustive evaluation and the sweep take about $0.29$~s because planar collision checks are too cheap to shift total runtime; because the video frames overlap temporally, these scenes do not form an exchangeable sample.
+Appendix~\ref{sec:sdd} reports a Stanford Drone Dataset diagnostic in which the sweep roughly halves the number of collision evaluations and both methods take about $0.29$~s.
 
 \section{Discussion}\label{sec:discussion}
 
-Theorem~\ref{thm:lower} rules out $o(n+\log J)$ exact black-box calibration. On the finite grids tested in Table~\ref{tab:public}, certified bisection is simpler and faster than randomized selection whenever most data points are unsafe at $\lambda_1$, whereas anchored selection becomes effective when many data points are already safe at $\lambda_1$ (as in the robot diagnostic, where $37$ of $48$ scenes are safe at $\lambda=0$) or when $n$ and $J$ are large.
+Theorem~\ref{thm:lower} rules out $o(n+\log J)$ exact black-box calibration. On the public grid benchmarks, certified bisection is faster when most examples are unsafe at $\lambda_1$, while the synthetic experiments show that the advantage at large $n$ and $J$ depends on the distribution of the last-unsafe indices (Tables~\ref{tab:public} and~\ref{tab:scaling}).
 
 When the planner exposes affine candidate scores, examining breakpoints where the chosen decision actually changes is far more informative than probing arbitrary grid parameters: Algorithm~2 skips losses to the left of each data point's last collision and remains exact under the majorant~\eqref{eq:maj} even when realized losses are nonmonotone. For parametric LPs, reversing the Eisner--Severance recursion \cite{eisner} halts path construction itself once calibration is settled.
 
 Several limitations bear emphasis. Our OR-Library benchmarks use LP relaxations and thresholded recourse losses to measure solver and evaluation counts; runtime gains depend on the relative cost of LP solves versus loss evaluations and shrink when the cutoff lies near $\lambda=0$. In addition, our path algorithms rely on affine dependence on $\lambda$ over a fixed feasible set $\mathcal X_i$; nonlinear objectives or $\lambda$-dependent constraints require different path-following methods. Finally, computational savings do not replace statistical assumptions: the risk bound in Corollary~\ref{cor:risk} requires exchangeable data points and a safe fallback, whereas temporally overlapping scenes require nonexchangeable extensions \cite{nonexchangeable}.
 
+Proposition~\ref{prop:lazy} assumes exact comparisons, whereas the LP generator accepts adjacency up to a scale-dependent objective tolerance and terminates on sufficiently narrow intervals. If either test skips a winning interval containing an unsafe decision, the computed $V_i$ can be too small and Corollary~\ref{cor:risk} need no longer cover the deployed parameter. Enumeration of all feasible binary decisions reproduced the open solver paths on the $100$ integer-planner instances in Appendix~\ref{sec:extended}, an instance-specific numerical check.
+
 \paragraph{Related work.}
 CDT calibrates decisions rather than prediction sets \cite{cdt}, and our nonmonotone binary guarantee uses the monotone majorant of conformal risk control \cite{crc}. Learn-then-Test \cite{ltt} and Pareto testing \cite{pareto} calibrate general risks on finite grids via multiple hypothesis tests. Upper envelopes and parametric LP paths are classical \cite{deberg,gusfield,eisner,megiddo}, and homotopy paths have been used to accelerate full-conformal prediction \cite{lei2019,li2024,speedcp}; here the solution path determines which counterfactual decisions must be evaluated, and for parametric LPs the path itself is constructed only as far as calibration requires.
+
+Hoare introduced partition-based selection \cite{hoare}, and Frederickson and Johnson studied selection in matrices with ordered rows and columns \cite{fj}. In our query model, the last-unsafe indices are hidden and a query compares one such index to a specified grid position. Bates et al.\ calibrate prediction sets to control a user-specified risk with high probability \cite{rcps}, while Lindemann et al.\ use conformal prediction regions for moving agents in a planning problem \cite{lindemann}. Here the calibrated quantity is the loss of the selected decision, and Corollary~\ref{cor:graded} controls its marginal expectation.
 
 \appendix
 \section{Mathematical Proofs}\label{sec:proofs}
@@ -509,15 +606,12 @@ The first sum is $k+1$ because Algorithm~2 halts at the $(k+1)$st unsafe event $
 \begin{proof}[Proof of Proposition~\ref{prop:lazy}]
 At each unresolved interval $[\ell,u]$ with endpoint optima $(x_\ell,x_u)$, the test point $t=(a_i^\top x_u-a_i^\top x_\ell)/(r_i^\top x_\ell-r_i^\top x_u)$ is identical to complete enumeration, and processing $[t,u]$ before $[\ell,t]$ emits the pieces of $\phi_i$ in decreasing order of right endpoints by induction on the recursion tree.
 
-If only the rightmost interval is requested, only the solve at $\lambda_{\max}$ is performed. For $m_i\ge 2$ emitted intervals, partitioning the LP solves by their role in the recursion tree gives
+The first emission uses only the solve at $\lambda_{\max}$. For $2\le m_i\le h_i$, count solves immediately after the $m_i$th emission. Both endpoint optima are known, and $m_i-1$ intersection tests have certified adjacencies. Each strict split discovers a distinct interior winning line. Of the $m_i$ emitted lines, the right endpoint line was known initially and the left endpoint line has been emitted exactly when $m_i=h_i$. Thus $m_i-1-\mathbf 1\{m_i=h_i\}$ emitted lines came from strict splits. Another $s_i$ such lines have been discovered and await emission. Adding the three types of solves gives
 \begin{equation}\label{eq:proof-prop44-count}
- N_{\mathrm{LP},i}
- =\underbrace{2}_{\text{endpoints }0,\lambda_{\max}}
- +\underbrace{(m_i-1)}_{\text{certified breakpoints }\phi_i(t)=f_{x_\ell}(t)}
- +\underbrace{(m_i-1+s_i)}_{\text{interior splits }\phi_i(t)<f_{x_\ell}(t)}
- =2m_i+s_i.
+ N_{\mathrm{LP},i}=2+(m_i-1)+\bigl(m_i-1-\mathbf 1\{m_i=h_i\}+s_i\bigr)
+ =2m_i+s_i-\mathbf 1\{m_i=h_i\}.
 \end{equation}
-Because $\phi_i$ has $h_i$ total pieces ($h_i-2$ interior pieces), the $m_i-1$ emitted interior pieces plus the $s_i$ discovered but unemitted pieces on the stack satisfy $m_i-1+s_i\le h_i-1$, so $0\le s_i\le h_i-m_i$.
+Since $s_i$ counts unemitted pieces, $0\le s_i\le h_i-m_i$. Full enumeration for $h_i\ge2$ therefore costs $2h_i-1$ solves. For $h_i=1$, the first emission still costs one solve, and a subsequent request to establish exhaustion uses the other endpoint solve.
 \end{proof}
 
 \begin{proof}[Proof of Corollary~\ref{cor:risk}]
@@ -533,6 +627,10 @@ whereas for $V_{(k+1)}\ge\lambda_{\max}$ the collision-free fallback yields $L_{
  =\frac{\lfloor(n+1)\alpha-1\rfloor+1}{n+1}
  \le\alpha.
 \end{equation}
+\end{proof}
+
+\begin{proof}[Proof of Corollary~\ref{cor:graded}]
+Let $\mathcal F=\{\lambda:\sum_{i=1}^{m}M_i(\lambda)\le m\alpha\}$ and write $C_i=\sup_{\lambda\in\mathcal F}M_i(\lambda)$. Since $M_m\le1$, feasibility on the calibration examples implies $\widetilde\lambda\in\mathcal F$, so $L_m(\widetilde\lambda)\le C_m$. For each $i$, take a point in $\mathcal F$ within $\varepsilon$ of the supremum defining $C_i$ in value, and let $u$ be the smallest of these $m$ points. By monotonicity, $M_i(u)\ge C_i-\varepsilon$ for every $i$, and since $u\in\mathcal F$, sending $\varepsilon$ to zero gives $\sum_i C_i\le m\alpha$. By symmetry of $\mathcal F$ and exchangeability of the curves, $\mathbb E[C_m]=m^{-1}\mathbb E[\sum_i C_i]\le\alpha$. For binary losses, applying the bound at level $(k+1)/m$ gives the rank bound in Corollary~\ref{cor:risk}, since a parameter strictly above $V_{(k+1)}$ has calibration majorant sum at most $k$.
 \end{proof}
 
 \section{Further Experimental Details}\label{sec:details}
@@ -556,9 +654,271 @@ $\sigma$ & $n$ & All winning intervals & Backward sweep & Loss evaluations saved
 \end{minipage}
 \vspace{4pt}
 
-In the Stanford Drone Dataset diagnostic (\texttt{nexus\_4}, $n=48$, $k=3$), $37$ of the $48$ scenes are safe at $\lambda=0$. On the $129$-point grid, full bisection uses $336$ loss queries, certified bisection uses $235$, anchored bisection uses $98$, and anchored selection (Algorithm~1) averages $96.4$ over $300$ seeds. On $[0,\infty)$, the backward sweep selects $\widetilde\lambda=0.027193>V_{(4)}=0.0271424$; with candidate splines and obstacle distances computed once and shared across methods, exhaustive evaluation takes $0.2916\pm0.0040$~s and the sweep takes $0.2895\pm0.0018$~s, so the savings from the sweep alone are smaller than run-to-run timing variation.
-
 An independent rerun of the continuous knapsack experiment on a second machine returned the exact same $2{,}498$ and $999$ LP solves and $1{,}273$ and $420$ loss evaluations, matching the cutoff in Table~\ref{tab:lazy}, with a reconstructed full-path time of $7.78$~s and a measured on-demand time of $2.91$~s averaged over three runs.
+
+\subsection{Stanford Drone Dataset diagnostic}\label{sec:sdd}
+
+We use $48$ temporally overlapping scenes from the \texttt{nexus\_4} recording of the Stanford Drone Dataset \cite{cdt,sdd} to evaluate the computational cost on recorded trajectories. At the first grid point, we find that $37$ of the $48$ scenes are already safe. On a $129$-point grid with $k=3$, we compare ordinary bisection ($336$ queries) with certified bisection ($235$), anchored bisection ($98$), and anchored selection ($96.4$ on average over $300$ seeds).
+
+Over $[0,\infty)$, the spline envelopes have $517$ winning intervals, compared with $494$ over $[0,1]$. Algorithm~2 requires $259$ collision evaluations, with a last-unsafe boundary of $0.0271424$ and a deployed parameter of $0.027193$. We use the same splines and obstacle distances when comparing exhaustive evaluation ($0.2916\pm0.0040$~s) with the sweep ($0.2895\pm0.0018$~s), a difference within run-to-run variation.
+
+\subsection{Threshold sensitivity and additional experiments}\label{sec:extended}
+
+\paragraph{Threshold sensitivity.} For each task, we vary the cost threshold from the 10th to the 90th percentile in steps of five on the same $48$ examples. We select the operating threshold whose exhaustive boundary is closest to $0.5$, giving the 60th percentile for knapsack and the 15th and 10th percentiles for set covering with $T=1$ and $T=10$. Figure~\ref{fig:thresholds} shows that joint stopping reduces both counts at all $51$ settings, with savings of at least $25\%$ on both measures at $40$ settings. For set covering, we report median savings in planner solves ($30.1\%$ for $T=1$ and $28.0\%$ for $T=10$) and in loss evaluations ($31.5\%$ and $29.1\%$) over the same thresholds. Each loss evaluation scores one decision across all $T$ realizations, and the replay counts both lookahead and the final request on an exhausted path.
+
+\begin{center}\begin{minipage}{\linewidth}\centering\small
+\setlength{\unitlength}{0.9pt}\begin{picture}(440,145)
+\put(112.5,130.0){\makebox(0,0){\small\bfseries Planner solves saved}}
+\put(29.0,31.0){{\color{black!20}\line(1,0){167}}}
+\put(24.0,31.0){\makebox(0,0)[r]{\scriptsize 0\%}}
+\put(29.0,51.0){{\color{black!20}\line(1,0){167}}}
+\put(24.0,51.0){\makebox(0,0)[r]{\scriptsize 25\%}}
+\put(29.0,71.0){{\color{black!20}\line(1,0){167}}}
+\put(24.0,71.0){\makebox(0,0)[r]{\scriptsize 50\%}}
+\put(29.0,91.0){{\color{black!20}\line(1,0){167}}}
+\put(24.0,91.0){\makebox(0,0)[r]{\scriptsize 75\%}}
+\put(29.0,111.0){{\color{black!20}\line(1,0){167}}}
+\put(24.0,111.0){\makebox(0,0)[r]{\scriptsize 100\%}}
+\put(29.0,23.0){\makebox(0,0){\scriptsize 10}}
+\put(70.8,23.0){\makebox(0,0){\scriptsize 30}}
+\put(112.5,23.0){\makebox(0,0){\scriptsize 50}}
+\put(154.2,23.0){\makebox(0,0){\scriptsize 70}}
+\put(196.0,23.0){\makebox(0,0){\scriptsize 90}}
+\put(112.5,11.0){\makebox(0,0){\scriptsize Cost percentile}}
+{\color{paperNavy}
+\qbezier(29.00,79.40)(34.22,68.49)(39.44,57.57)
+\qbezier(39.44,57.57)(44.66,56.02)(49.88,54.46)
+\qbezier(49.88,54.46)(55.09,57.36)(60.31,60.26)
+\qbezier(60.31,60.26)(65.53,56.01)(70.75,51.76)
+\qbezier(70.75,51.76)(75.97,53.79)(81.19,55.82)
+\qbezier(81.19,55.82)(86.41,56.26)(91.62,56.70)
+\qbezier(91.62,56.70)(96.84,54.96)(102.06,53.22)
+\qbezier(102.06,53.22)(107.28,55.67)(112.50,58.12)
+\qbezier(112.50,58.12)(117.72,59.02)(122.94,59.92)
+\qbezier(122.94,59.92)(128.16,61.46)(133.38,63.00)
+\qbezier(133.38,63.00)(138.59,64.41)(143.81,65.82)
+\qbezier(143.81,65.82)(149.03,61.79)(154.25,57.75)
+\qbezier(154.25,57.75)(159.47,56.74)(164.69,55.74)
+\qbezier(164.69,55.74)(169.91,55.40)(175.12,55.06)
+\qbezier(175.12,55.06)(180.34,55.71)(185.56,56.36)
+\qbezier(185.56,56.36)(190.78,55.82)(196.00,55.28)
+\put(29.0,79.4){\circle*{2.8}}
+\put(39.4,57.6){\circle*{2.8}}
+\put(49.9,54.5){\circle*{2.8}}
+\put(60.3,60.3){\circle*{2.8}}
+\put(70.8,51.8){\circle*{2.8}}
+\put(81.2,55.8){\circle*{2.8}}
+\put(91.6,56.7){\circle*{2.8}}
+\put(102.1,53.2){\circle*{2.8}}
+\put(112.5,58.1){\circle*{2.8}}
+\put(122.9,59.9){\circle*{2.8}}
+\put(133.4,63.0){\circle*{2.8}}
+\put(143.8,65.8){\circle*{2.8}}
+\put(154.2,57.8){\circle*{2.8}}
+\put(164.7,55.7){\circle*{2.8}}
+\put(175.1,55.1){\circle*{2.8}}
+\put(185.6,56.4){\circle*{2.8}}
+\put(196.0,55.3){\circle*{2.8}}
+}
+{\color{unsafeRed}
+\qbezier(29.00,93.87)(34.22,92.05)(39.44,90.23)
+\qbezier(39.44,90.23)(44.66,83.05)(49.88,75.87)
+\qbezier(49.88,75.87)(55.09,71.97)(60.31,68.08)
+\qbezier(60.31,68.08)(65.53,66.91)(70.75,65.74)
+\qbezier(70.75,65.74)(75.97,64.95)(81.19,64.15)
+\qbezier(81.19,64.15)(86.41,64.62)(91.62,65.08)
+\qbezier(91.62,65.08)(96.84,63.52)(102.06,61.96)
+\qbezier(102.06,61.96)(107.28,58.53)(112.50,55.10)
+\qbezier(112.50,55.10)(117.72,53.80)(122.94,52.51)
+\qbezier(122.94,52.51)(128.16,52.25)(133.38,51.99)
+\qbezier(133.38,51.99)(138.59,50.65)(143.81,49.31)
+\qbezier(143.81,49.31)(149.03,47.54)(154.25,45.78)
+\qbezier(154.25,45.78)(159.47,45.20)(164.69,44.61)
+\qbezier(164.69,44.61)(169.91,45.73)(175.12,46.84)
+\qbezier(175.12,46.84)(180.34,46.49)(185.56,46.13)
+\qbezier(185.56,46.13)(190.78,45.44)(196.00,44.74)
+\put(29.0,93.9){\makebox(0,0){\tiny$\times$}}
+\put(39.4,90.2){\makebox(0,0){\tiny$\times$}}
+\put(49.9,75.9){\makebox(0,0){\tiny$\times$}}
+\put(60.3,68.1){\makebox(0,0){\tiny$\times$}}
+\put(70.8,65.7){\makebox(0,0){\tiny$\times$}}
+\put(81.2,64.2){\makebox(0,0){\tiny$\times$}}
+\put(91.6,65.1){\makebox(0,0){\tiny$\times$}}
+\put(102.1,62.0){\makebox(0,0){\tiny$\times$}}
+\put(112.5,55.1){\makebox(0,0){\tiny$\times$}}
+\put(122.9,52.5){\makebox(0,0){\tiny$\times$}}
+\put(133.4,52.0){\makebox(0,0){\tiny$\times$}}
+\put(143.8,49.3){\makebox(0,0){\tiny$\times$}}
+\put(154.2,45.8){\makebox(0,0){\tiny$\times$}}
+\put(164.7,44.6){\makebox(0,0){\tiny$\times$}}
+\put(175.1,46.8){\makebox(0,0){\tiny$\times$}}
+\put(185.6,46.1){\makebox(0,0){\tiny$\times$}}
+\put(196.0,44.7){\makebox(0,0){\tiny$\times$}}
+}
+{\color{safeGreen}
+\qbezier(29.00,87.25)(34.22,84.23)(39.44,81.21)
+\qbezier(39.44,81.21)(44.66,75.43)(49.88,69.64)
+\qbezier(49.88,69.64)(55.09,67.77)(60.31,65.89)
+\qbezier(60.31,65.89)(65.53,65.12)(70.75,64.35)
+\qbezier(70.75,64.35)(75.97,62.12)(81.19,59.88)
+\qbezier(81.19,59.88)(86.41,59.13)(91.62,58.37)
+\qbezier(91.62,58.37)(96.84,57.66)(102.06,56.95)
+\qbezier(102.06,56.95)(107.28,54.74)(112.50,52.53)
+\qbezier(112.50,52.53)(117.72,52.33)(122.94,52.13)
+\qbezier(122.94,52.13)(128.16,52.78)(133.38,53.42)
+\qbezier(133.38,53.42)(138.59,52.43)(143.81,51.43)
+\qbezier(143.81,51.43)(149.03,48.58)(154.25,45.73)
+\qbezier(154.25,45.73)(159.47,45.48)(164.69,45.22)
+\qbezier(164.69,45.22)(169.91,44.74)(175.12,44.27)
+\qbezier(175.12,44.27)(180.34,44.76)(185.56,45.26)
+\qbezier(185.56,45.26)(190.78,44.39)(196.00,43.53)
+\put(29.0,87.2){\circle{3.2}}
+\put(39.4,81.2){\circle{3.2}}
+\put(49.9,69.6){\circle{3.2}}
+\put(60.3,65.9){\circle{3.2}}
+\put(70.8,64.4){\circle{3.2}}
+\put(81.2,59.9){\circle{3.2}}
+\put(91.6,58.4){\circle{3.2}}
+\put(102.1,57.0){\circle{3.2}}
+\put(112.5,52.5){\circle{3.2}}
+\put(122.9,52.1){\circle{3.2}}
+\put(133.4,53.4){\circle{3.2}}
+\put(143.8,51.4){\circle{3.2}}
+\put(154.2,45.7){\circle{3.2}}
+\put(164.7,45.2){\circle{3.2}}
+\put(175.1,44.3){\circle{3.2}}
+\put(185.6,45.3){\circle{3.2}}
+\put(196.0,43.5){\circle{3.2}}
+}
+\put(332.5,130.0){\makebox(0,0){\small\bfseries Loss evaluations saved}}
+\put(249.0,31.0){{\color{black!20}\line(1,0){167}}}
+\put(249.0,51.0){{\color{black!20}\line(1,0){167}}}
+\put(249.0,71.0){{\color{black!20}\line(1,0){167}}}
+\put(249.0,91.0){{\color{black!20}\line(1,0){167}}}
+\put(249.0,111.0){{\color{black!20}\line(1,0){167}}}
+\put(249.0,23.0){\makebox(0,0){\scriptsize 10}}
+\put(290.8,23.0){\makebox(0,0){\scriptsize 30}}
+\put(332.5,23.0){\makebox(0,0){\scriptsize 50}}
+\put(374.2,23.0){\makebox(0,0){\scriptsize 70}}
+\put(416.0,23.0){\makebox(0,0){\scriptsize 90}}
+\put(332.5,11.0){\makebox(0,0){\scriptsize Cost percentile}}
+{\color{paperNavy}
+\qbezier(249.00,98.80)(254.22,91.51)(259.44,84.22)
+\qbezier(259.44,84.22)(264.66,78.53)(269.88,72.83)
+\qbezier(269.88,72.83)(275.09,74.26)(280.31,75.69)
+\qbezier(280.31,75.69)(285.53,69.64)(290.75,63.60)
+\qbezier(290.75,63.60)(295.97,65.51)(301.19,67.42)
+\qbezier(301.19,67.42)(306.41,67.09)(311.62,66.75)
+\qbezier(311.62,66.75)(316.84,63.93)(322.06,61.11)
+\qbezier(322.06,61.11)(327.28,63.10)(332.50,65.08)
+\qbezier(332.50,65.08)(337.72,65.84)(342.94,66.60)
+\qbezier(342.94,66.60)(348.16,67.88)(353.38,69.16)
+\qbezier(353.38,69.16)(358.59,70.59)(363.81,72.02)
+\qbezier(363.81,72.02)(369.03,67.77)(374.25,63.51)
+\qbezier(374.25,63.51)(379.47,62.65)(384.69,61.78)
+\qbezier(384.69,61.78)(389.91,61.40)(395.12,61.02)
+\qbezier(395.12,61.02)(400.34,61.55)(405.56,62.08)
+\qbezier(405.56,62.08)(410.78,61.45)(416.00,60.81)
+\put(249.0,98.8){\circle*{2.8}}
+\put(259.4,84.2){\circle*{2.8}}
+\put(269.9,72.8){\circle*{2.8}}
+\put(280.3,75.7){\circle*{2.8}}
+\put(290.8,63.6){\circle*{2.8}}
+\put(301.2,67.4){\circle*{2.8}}
+\put(311.6,66.7){\circle*{2.8}}
+\put(322.1,61.1){\circle*{2.8}}
+\put(332.5,65.1){\circle*{2.8}}
+\put(342.9,66.6){\circle*{2.8}}
+\put(353.4,69.2){\circle*{2.8}}
+\put(363.8,72.0){\circle*{2.8}}
+\put(374.2,63.5){\circle*{2.8}}
+\put(384.7,61.8){\circle*{2.8}}
+\put(395.1,61.0){\circle*{2.8}}
+\put(405.6,62.1){\circle*{2.8}}
+\put(416.0,60.8){\circle*{2.8}}
+}
+{\color{unsafeRed}
+\qbezier(249.00,100.56)(254.22,97.51)(259.44,94.46)
+\qbezier(259.44,94.46)(264.66,86.73)(269.88,79.00)
+\qbezier(269.88,79.00)(275.09,74.58)(280.31,70.17)
+\qbezier(280.31,70.17)(285.53,68.73)(290.75,67.30)
+\qbezier(290.75,67.30)(295.97,66.30)(301.19,65.31)
+\qbezier(301.19,65.31)(306.41,65.81)(311.62,66.31)
+\qbezier(311.62,66.31)(316.84,64.81)(322.06,63.31)
+\qbezier(322.06,63.31)(327.28,59.76)(332.50,56.21)
+\qbezier(332.50,56.21)(337.72,54.82)(342.94,53.43)
+\qbezier(342.94,53.43)(348.16,53.11)(353.38,52.80)
+\qbezier(353.38,52.80)(358.59,51.43)(363.81,50.05)
+\qbezier(363.81,50.05)(369.03,48.26)(374.25,46.47)
+\qbezier(374.25,46.47)(379.47,45.87)(384.69,45.26)
+\qbezier(384.69,45.26)(389.91,46.40)(395.12,47.53)
+\qbezier(395.12,47.53)(400.34,47.17)(405.56,46.80)
+\qbezier(405.56,46.80)(410.78,46.14)(416.00,45.48)
+\put(249.0,100.6){\makebox(0,0){\tiny$\times$}}
+\put(259.4,94.5){\makebox(0,0){\tiny$\times$}}
+\put(269.9,79.0){\makebox(0,0){\tiny$\times$}}
+\put(280.3,70.2){\makebox(0,0){\tiny$\times$}}
+\put(290.8,67.3){\makebox(0,0){\tiny$\times$}}
+\put(301.2,65.3){\makebox(0,0){\tiny$\times$}}
+\put(311.6,66.3){\makebox(0,0){\tiny$\times$}}
+\put(322.1,63.3){\makebox(0,0){\tiny$\times$}}
+\put(332.5,56.2){\makebox(0,0){\tiny$\times$}}
+\put(342.9,53.4){\makebox(0,0){\tiny$\times$}}
+\put(353.4,52.8){\makebox(0,0){\tiny$\times$}}
+\put(363.8,50.1){\makebox(0,0){\tiny$\times$}}
+\put(374.2,46.5){\makebox(0,0){\tiny$\times$}}
+\put(384.7,45.3){\makebox(0,0){\tiny$\times$}}
+\put(395.1,47.5){\makebox(0,0){\tiny$\times$}}
+\put(405.6,46.8){\makebox(0,0){\tiny$\times$}}
+\put(416.0,45.5){\makebox(0,0){\tiny$\times$}}
+}
+{\color{safeGreen}
+\qbezier(249.00,93.82)(254.22,89.56)(259.44,85.29)
+\qbezier(259.44,85.29)(264.66,78.92)(269.88,72.56)
+\qbezier(269.88,72.56)(275.09,70.26)(280.31,67.97)
+\qbezier(280.31,67.97)(285.53,66.91)(290.75,65.84)
+\qbezier(290.75,65.84)(295.97,63.47)(301.19,61.10)
+\qbezier(301.19,61.10)(306.41,60.44)(311.62,59.77)
+\qbezier(311.62,59.77)(316.84,58.96)(322.06,58.15)
+\qbezier(322.06,58.15)(327.28,55.93)(332.50,53.72)
+\qbezier(332.50,53.72)(337.72,53.39)(342.94,53.05)
+\qbezier(342.94,53.05)(348.16,53.66)(353.38,54.28)
+\qbezier(353.38,54.28)(358.59,53.26)(363.81,52.23)
+\qbezier(363.81,52.23)(369.03,49.32)(374.25,46.40)
+\qbezier(374.25,46.40)(379.47,46.09)(384.69,45.79)
+\qbezier(384.69,45.79)(389.91,45.29)(395.12,44.80)
+\qbezier(395.12,44.80)(400.34,45.37)(405.56,45.94)
+\qbezier(405.56,45.94)(410.78,45.06)(416.00,44.18)
+\put(249.0,93.8){\circle{3.2}}
+\put(259.4,85.3){\circle{3.2}}
+\put(269.9,72.6){\circle{3.2}}
+\put(280.3,68.0){\circle{3.2}}
+\put(290.8,65.8){\circle{3.2}}
+\put(301.2,61.1){\circle{3.2}}
+\put(311.6,59.8){\circle{3.2}}
+\put(322.1,58.1){\circle{3.2}}
+\put(332.5,53.7){\circle{3.2}}
+\put(342.9,53.1){\circle{3.2}}
+\put(353.4,54.3){\circle{3.2}}
+\put(363.8,52.2){\circle{3.2}}
+\put(374.2,46.4){\circle{3.2}}
+\put(384.7,45.8){\circle{3.2}}
+\put(395.1,44.8){\circle{3.2}}
+\put(405.6,45.9){\circle{3.2}}
+\put(416.0,44.2){\circle{3.2}}
+}
+\end{picture}\par
+{\footnotesize \textcolor{paperNavy}{$\bullet$ Knapsack}\qquad \textcolor{unsafeRed}{$\times$ Set covering, $T=1$}\qquad \textcolor{safeGreen}{$\circ$ Set covering, $T=10$}}\par
+\captionof{figure}{Percentage savings relative to independent stopping as a function of the cost percentile, with one mark per task and threshold.}\label{fig:thresholds}
+\end{minipage}\end{center}
+
+\paragraph{Graded recourse losses.} We replace the binary indicator in~\eqref{eq:cover-loss} with $\min\{1,\max\{0,c/\tau-1\}\}$, where $c$ is first-stage cost plus mean recourse cost in the normalization of that equation. At all $34$ threshold settings, the graded sweep of Corollary~\ref{cor:graded} recovers the exhaustive suffix-majorant boundary. We observe a $79.0\%$ reduction in loss evaluations for $T=1$ ($11{,}171$ to $2{,}347$) and an $83.6\%$ reduction for $T=10$ ($10{,}673$ to $1{,}755$) when using joint stopping at the binary operating thresholds. The median savings across the $17$ thresholds are $40.5\%$ and $40.4\%$, while at the 90th percentile both procedures evaluate all $11{,}588$ decisions.
+
+\paragraph{Grid selection.} We vary $n$ over $\{48,100,250,500,1000,2000\}$ and $J$ over $\{129,1025,8193\}$, giving $54$ settings across the three distributions in Table~\ref{tab:scaling}. In the first two regimes, $\rho_i$ is positive with probability $0.35$ or $0.90$ and, conditional on being positive, equals $\lceil JX\rceil$ for $X\sim\mathrm{Beta}(1.2,25)$, while in the third regime it is positive with probability $0.95$ and uniform on $\{1,\ldots,J\}$ conditional on positivity. We compare ordinary and certified bisection with anchored three-way selection and with anchored and unanchored two-way selection using $40$ draws per setting ($2{,}160$ trials, seed $2026$). Given a uniformly chosen pivot with index $t$ below the upper bound, the two-way variant constructs the $>t$ and $\le t$ blocks using at most one new query per remaining index. If the target rank lies in the upper block, recurse there, and if it is the next rank, return $t$. Otherwise discard the upper block and pivot, subtract their size from the rank, and recurse with upper bound $t$. When $t$ equals the upper bound, partition into $=t$ and $<t$ and resolve the entire tie block at once, returning the common index immediately whenever the search bounds coincide. All five methods recover the same cutoff on every draw, with the anchored two-way variant using a median of $21.9\%$ fewer queries than Algorithm~1 across the $54$ cell means.
+
+\paragraph{Integer planners and grid resolution.} We draw $100$ synthetic instances for each of two resource-allocation planners (seed $2026$), a continuous LP with $30$ variables and five constraints and a binary MILP with $22$ variables and four constraints. For each planner, we fix the feasible set, vary an affine objective in $\lambda$, and evaluate a binary resource violation and its clipped graded excess with resource limit $0.65$ and scale $0.25$. We fix $\alpha=0.10$ and compare the on-demand and exhaustive boundaries for each planner and loss, obtaining agreement to numerical tolerance in all four combinations. We check the integer paths by enumerating all $2^{22}$ binary vectors on each instance and comparing the upper envelope of the feasible vectors with the solver path. The $1{,}311$ open pieces recovered by enumeration agree with the solver paths in their endpoints and decisions, and both loss boundaries agree. For the graded loss, the grid cutoff is $0.2265625$ for both planners on a $129$-point grid, while the continuous boundaries are $0.219401$ for LP and $0.222530$ for MILP. On the calibration examples, we obtain a $3.68\%$ increase in mean objective intercept for LP and a $1.33\%$ increase for MILP by deploying the recorded feasible parameter just above the continuous boundary in place of the grid choice.
+
+\paragraph{Held-out losses and endpoint checks.} We generate $300$ LP examples with $25$ variables and four constraints (seed $999$), of which $106$ have nonmonotone graded losses. For each $\alpha\in\{0.05,0.10,0.20\}$, we draw $500$ random splits of this fixed pool into $150$ calibration and $150$ held-out examples (seed $777$). For each split, we check the calibration budget at the deployed parameter and compute the mean realized loss and mean suffix majorant on the held-out examples. We report the mean held-out realized loss ($0.04364$, $0.09511$, $0.19474$) and mean held-out suffix majorant ($0.04373$, $0.09565$, $0.19574$) across the $500$ splits at each risk level. We also check $729$ event configurations, $2{,}030$ tied-rank cases, and $6{,}144$ emissions from $1{,}024$ rational paths in exact arithmetic, including singleton decisions at interior and terminal ties and the final-emission term in~\eqref{eq:proof-prop44-count}.
 
 \begin{thebibliography}{20}
 \bibitem{cdt} J. Lekeufack, A. N. Angelopoulos, A. Bajcsy, M. I. Jordan,
@@ -628,6 +988,11 @@ Scenes,'' \emph{European Conference on Computer Vision}, 2016.
 A. F. T. Martins, ``Non-Exchangeable Conformal Risk Control,''
 \emph{International Conference on Learning Representations}, 2024.
 \href{https://arxiv.org/abs/2310.01262}{arXiv:2310.01262}.
+\bibitem{hoare} C. A. R. Hoare, \emph{Algorithm 65: Find}, Communications of the ACM, 4(7), 321--322, 1961.
+\bibitem{fj} G. N. Frederickson and D. B. Johnson, \emph{Generalized Selection and Ranking: Sorted Matrices}, SIAM Journal on Computing, 13(1), 14--30, 1984.
+\bibitem{rcps} S. Bates, A. N. Angelopoulos, L. Lei, J. Malik, and M. I. Jordan, \emph{Distribution-Free, Risk-Controlling Prediction Sets}, Journal of the ACM, 68(6), 2021.
+\bibitem{lindemann} L. Lindemann, M. Cleaveland, G. Shim, and G. J. Pappas, \emph{Safe Planning in Dynamic Environments Using Conformal Prediction}, IEEE Robotics and Automation Letters, 8(8), 5116--5123, 2023.
+
 \end{thebibliography}
 
 \end{document}

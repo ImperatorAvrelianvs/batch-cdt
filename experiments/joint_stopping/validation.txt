@@ -1,0 +1,17 @@
+('knapsack', 1)
+lp_saved_pct min / median / max: 25.946 32.131 60.502
+losses_saved_pct min / median / max: 37.267 44.504 84.746
+independent wall time (s) [8.0, 8.237, 7.822] median 8.0
+joint wall time (s) [4.086, 4.055, 4.284] median 4.086
+('set_cover', 1)
+lp_saved_pct min / median / max: 17.015 30.126 78.583
+losses_saved_pct min / median / max: 17.829 31.517 86.946
+independent wall time (s) [65.357, 65.065, 51.397] median 65.065
+joint wall time (s) [13.543, 13.842, 11.16] median 13.543
+('set_cover', 10)
+lp_saved_pct min / median / max: 15.667 28.031 70.309
+losses_saved_pct min / median / max: 16.474 29.096 78.53
+independent wall time (s) [211.829, 176.919, 176.875] median 176.919
+joint wall time (s) [45.31, 38.291, 40.119] median 40.119
+Set-covering median across 34 settings: lp_saved_pct 29.078
+Set-covering median across 34 settings: losses_saved_pct 30.306
